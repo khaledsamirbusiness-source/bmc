@@ -506,4 +506,269 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
 })();
 </script>
 
+
+<!-- Ticket scope column + extended Excel export (2026-08-17) -->
+<style id="ticketScopeExportPatchStyle">
+.ticketTable th:nth-child(1){width:6.5%}
+.ticketTable th:nth-child(2){width:4.5%}
+.ticketTable th:nth-child(3){width:5.5%}
+.ticketTable th:nth-child(4){width:5.5%}
+.ticketTable th:nth-child(5){width:4.5%}
+.ticketTable th:nth-child(6){width:4.5%}
+.ticketTable th:nth-child(7){width:6.5%}
+.ticketTable th:nth-child(8){width:7.5%}
+.ticketTable th:nth-child(9){width:7%}
+.ticketTable th:nth-child(10){width:9.5%}
+.ticketTable th:nth-child(11){width:10.5%}
+.ticketTable th:nth-child(12){width:5%}
+.ticketTable th:nth-child(13){width:5%}
+.ticketTable th:nth-child(14){width:18%}
+@media(max-width:700px){
+ .ticketTable td:nth-child(1):before{content:"رقم البلاغ"}
+ .ticketTable td:nth-child(2):before{content:"الأولوية"}
+ .ticketTable td:nth-child(3):before{content:"الحالة"}
+ .ticketTable td:nth-child(4):before{content:"حالة SLA"}
+ .ticketTable td:nth-child(5):before{content:"بحاجة للانتباه"}
+ .ticketTable td:nth-child(6):before{content:"معاد فتحه"}
+ .ticketTable td:nth-child(7):before{content:"اسم المشرف"}
+ .ticketTable td:nth-child(8):before{content:"اسم المقاول"}
+ .ticketTable td:nth-child(9):before{content:"النطاق الرئيسي"}
+ .ticketTable td:nth-child(10):before{content:"تاريخ الإنشاء"}
+ .ticketTable td:nth-child(11):before{content:"اسم المدرسة"}
+ .ticketTable td:nth-child(12):before{content:"الرقم الوزاري"}
+ .ticketTable td:nth-child(13):before{content:"النوع"}
+ .ticketTable td:nth-child(14):before{content:"الوصف"}
+}
+</style>
+<script id="ticketScopeExportPatchScript">
+(()=>{
+ const flagLabel=v=>{
+   if(v===true||v===1)return "نعم";
+   if(v===false||v===0||v==null)return "لا";
+   const x=String(v).trim().toLowerCase();
+   if(!x||["0","false","no","n","لا","none","null","undefined"].includes(x))return "لا";
+   if(["1","true","yes","y","نعم"].includes(x))return "نعم";
+   const num=Number(x); if(Number.isFinite(num)) return num!==0?"نعم":"لا";
+   return "نعم";
+ };
+ const headRow=document.querySelector("#tickets .ticketTable thead tr");
+ if(headRow && !headRow.querySelector('[data-extra="scopeMain"]')){
+   const contractor=[...headRow.querySelectorAll("th")].find(th=>th.textContent.trim()==="اسم المقاول");
+   contractor?.insertAdjacentHTML("afterend",'<th data-extra="scopeMain">النطاق الرئيسي</th>');
+ }
+
+ const caseUrl=r=>r.recordId?`https://usc-is.onbmc.com/helix/index.html#/com.bmc.dsm.bwfa/view/com.bmc.dsm.case-lib:Case%20Edit?Case%20ID=${encodeURIComponent(r.recordId)}`:"";
+ renderTickets=()=>{
+   if(!$("tickets")||$("tickets").classList.contains("hidden"))return;
+   const shown=Math.min(typeof linkedTicketLimit!=="undefined"?linkedTicketLimit:(typeof ticketLimit!=="undefined"?ticketLimit:250),F.length);
+   $("tc").textContent=n(F.length);
+   $("ticketShown").textContent=F.length?`عرض ${n(shown)} من ${n(F.length)} بلاغ`:"لا توجد بلاغات مطابقة";
+   $("tr").innerHTML=F.slice(0,shown).map(r=>{
+     const url=caseUrl(r);
+     const caseCell=url?`<a href="${url}" target="_blank" rel="noopener noreferrer" title="فتح البلاغ في منصة الدعم" style="color:#079a9b;font-weight:700;text-decoration:none">${esc(r.caseId)}</a>`:esc(r.caseId);
+     return `<tr>
+       <td>${caseCell}</td>
+       <td>${esc(lab("priority",r.priority))}</td>
+       <td>${esc(lab("status",r.status))}</td>
+       <td>${ticketSlaBadge(r)}</td>
+       <td>${esc(flagLabel(r.needAttention))}</td>
+       <td>${esc(flagLabel(r.reopened))}</td>
+       <td>${esc(r.supervisor)}</td>
+       <td>${esc(r.contractor)}</td>
+       <td>${esc(r.category2||"—")}</td>
+       <td>${fmt(r.createdDate)}</td>
+       <td>${esc(r.building)}</td>
+       <td>${esc(r.display)}</td>
+       <td>${esc(r.gender)}</td>
+       <td class="ticketDescription" title="${esc(r.description)}">${esc(r.description||"—")}</td>
+     </tr>`;
+   }).join("");
+ };
+ window.renderTicketTab=renderTickets;
+
+ const exportTicketsExtended=()=>{
+   const headers=[
+     "رقم البلاغ","الأولوية","الحالة","حالة SLA","بحاجة للانتباه","معاد فتحه",
+     "اسم المشرف","اسم المقاول","النطاق الرئيسي","تاريخ الإنشاء",
+     "Resolution date","Approval justification","Cancell justification",
+     "اسم المدرسة","الرقم الوزاري","النوع","الوصف"
+   ];
+   const rows=[headers,...F.map(r=>[
+     r.caseId,
+     lab("priority",r.priority),
+     lab("status",r.status),
+     lab("sla",r.slmStatus),
+     flagLabel(r.needAttention),
+     flagLabel(r.reopened),
+     r.supervisor,
+     r.contractor,
+     r.category2||"",
+     fmt(r.createdDate),
+     r.resolutionDate?fmt(r.resolutionDate):"",
+     r.approvalJustification||"",
+     r.cancelJustification||"",
+     r.building,
+     r.display,
+     r.gender,
+     r.description||""
+   ])];
+   const a=document.createElement("a"),url=URL.createObjectURL(ticketXlsx(rows));
+   a.href=url;
+   a.download="بلاغات_الدعم_حسب_الفلاتر.xlsx";
+   a.click();
+   setTimeout(()=>URL.revokeObjectURL(url),2000);
+ };
+ exportTickets=exportTicketsExtended;
+ const exportBtn=document.getElementById("ticketExport");
+ if(exportBtn) exportBtn.onclick=exportTicketsExtended;
+ setTimeout(()=>{ if(!$("tickets")?.classList.contains("hidden")) renderTickets(); },0);
+})();
+</script>
+
+
+<script id="ticketExportJsZipFix">
+(()=>{
+  const escXml=v=>String(v??"")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g,"")
+    .replace(/&/g,"&amp;")
+    .replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;");
+
+  const colName=n=>{
+    let s="";
+    while(n>0){ n--; s=String.fromCharCode(65+(n%26))+s; n=Math.floor(n/26); }
+    return s;
+  };
+
+  const yesNo=v=>{
+    if(v===true||v===1)return "نعم";
+    if(v===false||v===0||v==null)return "لا";
+    const x=String(v).trim().toLowerCase();
+    if(!x||["0","false","no","n","لا","none","null","undefined"].includes(x))return "لا";
+    if(["1","true","yes","y","نعم"].includes(x))return "نعم";
+    const num=Number(x);
+    if(Number.isFinite(num))return num!==0?"نعم":"لا";
+    return "نعم";
+  };
+
+  const safeFmt=v=>{
+    if(v==null||v==="")return "";
+    try{
+      const d=new Date(v);
+      if(!Number.isFinite(d.getTime()))return String(v);
+      return new Intl.DateTimeFormat("ar-SA-u-nu-latn",{
+        timeZone:"Asia/Riyadh",dateStyle:"medium",timeStyle:"short"
+      }).format(d);
+    }catch(_){ return String(v); }
+  };
+
+  async function exportTicketsJsZip(){
+    try{
+      if(typeof JSZip!=="function") throw new Error("JSZip غير متاح");
+
+      const source=(typeof F!=="undefined" && Array.isArray(F)) ? F : [];
+      const headers=[
+        "رقم البلاغ","الأولوية","الحالة","حالة SLA","بحاجة للانتباه","معاد فتحه",
+        "اسم المشرف","اسم المقاول","النطاق الرئيسي","تاريخ الإنشاء",
+        "تاريخ الحل","وصف الحل",
+        "اسم المدرسة","الرقم الوزاري","النوع","الوصف"
+      ];
+
+      const rows=[headers,...source.map(r=>[
+        r?.caseId??"",
+        (typeof lab==="function"?lab("priority",r?.priority):r?.priority)??"",
+        (typeof lab==="function"?lab("status",r?.status):r?.status)??"",
+        (typeof lab==="function"?lab("sla",r?.slmStatus):r?.slmStatus)??"",
+        yesNo(r?.needAttention),
+        yesNo(r?.reopened),
+        r?.supervisor??"",
+        r?.contractor??"",
+        r?.category2??"",
+        safeFmt(r?.createdDate),
+        safeFmt(r?.resolutionDate),
+        r?.resolutionDescription??"",
+        r?.building??"",
+        r?.display??"",
+        r?.gender??"",
+        r?.description??""
+      ])];
+
+      const maxCols=headers.length;
+      const lastCol=colName(maxCols);
+      const widths=[19,12,16,16,18,18,20,22,18,20,20,28,38,16,12,60];
+      const cols=widths.map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join("");
+
+      const sheetRows=rows.map((row,ri)=>
+        `<row r="${ri+1}">`+
+        row.map((v,ci)=>`<c r="${colName(ci+1)}${ri+1}" t="inlineStr"><is><t xml:space="preserve">${escXml(v)}</t></is></c>`).join("")+
+        `</row>`
+      ).join("");
+
+      const sheet=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetViews><sheetView rightToLeft="1" workbookViewId="0">
+    <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>
+  </sheetView></sheetViews>
+  <cols>${cols}</cols>
+  <sheetData>${sheetRows}</sheetData>
+  <autoFilter ref="A1:${lastCol}${Math.max(1,rows.length)}"/>
+</worksheet>`;
+
+      const zip=new JSZip();
+      zip.file("[Content_Types].xml",`<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>`);
+      zip.folder("_rels").file(".rels",`<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`);
+      zip.folder("xl").file("workbook.xml",`<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets><sheet name="البلاغات" sheetId="1" r:id="rId1"/></sheets>
+</workbook>`);
+      zip.folder("xl").folder("_rels").file("workbook.xml.rels",`<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>`);
+      zip.folder("xl").folder("worksheets").file("sheet1.xml",sheet);
+
+      const blob=await zip.generateAsync({
+        type:"blob",
+        mimeType:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        compression:"DEFLATE",
+        compressionOptions:{level:6}
+      });
+
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement("a");
+      a.href=url;
+      a.download="بلاغات_الدعم_حسب_الفلاتر.xlsx";
+      a.style.display="none";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),5000);
+    }catch(err){
+      console.error("Excel export error:",err);
+      alert("تعذر تصدير ملف Excel: "+(err?.message||err));
+    }
+  }
+
+  window.exportTickets=exportTicketsJsZip;
+
+  const bind=()=>{
+    const btn=document.getElementById("ticketExport");
+    if(btn) btn.onclick=exportTicketsJsZip;
+  };
+  bind();
+  if(document.readyState==="loading") document.addEventListener("DOMContentLoaded",bind,{once:true});
+  setTimeout(bind,0);
+})();
+</script>
+
 </body></html>
