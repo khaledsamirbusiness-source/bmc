@@ -782,4 +782,23 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
 })();
 </script>
 
+
+<!-- Refresh visible date/time labels after "مسح الفلاتر" -->
+<script id="dateClearDisplayFix">
+(()=>{
+  const clearBtn=document.getElementById("clear");
+  if(!clearBtn)return;
+
+  clearBtn.addEventListener("click",()=>{
+    // Let the dashboard's existing clear-filter logic run first.
+    setTimeout(()=>{
+      ["from","fromTime","to","toTime"].forEach(id=>{
+        const el=document.getElementById(id);
+        if(el)el.dispatchEvent(new Event("change",{bubbles:false}));
+      });
+    },0);
+  });
+})();
+</script>
+
 </body></html>
