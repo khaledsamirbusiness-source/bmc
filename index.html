@@ -1341,4 +1341,172 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
 #dot.pulseOk{color:#19b59f!important}
 </style>
 
+
+<!-- Final reset behavior: delete data.json from GitHub + wait for public deployment -->
+<style id="pulseSizeAndBusyColorFix">
+#dot::after{
+  inset:-2px!important;
+  border-width:1.5px!important;
+  animation:ghPulseSmall 1.45s ease-out infinite!important;
+}
+@keyframes ghPulseSmall{
+  0%{transform:scale(.78);opacity:.48}
+  72%,100%{transform:scale(1.28);opacity:0}
+}
+#dot.busy,#dot.pulseBusy,#dot.pulseWarn{
+  background:#e4b23b!important;
+  color:#e4b23b!important;
+}
+#dot.pulseOk{
+  background:#19b59f!important;
+  color:#19b59f!important;
+}
+#dot.pulseError{
+  background:#d94e5d!important;
+  color:#d94e5d!important;
+}
+</style>
+
+<script id="githubDeleteResetFinalFix">
+(()=>{
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+  const setResetDotMode=mode=>{
+    const d=document.getElementById("dot");
+    if(!d)return;
+    d.classList.remove("pulseOk","pulseBusy","pulseWarn","pulseError","busy");
+    if(mode==="busy")d.classList.add("pulseBusy");
+    else if(mode==="warn")d.classList.add("pulseWarn");
+    else if(mode==="error")d.classList.add("pulseError");
+    else d.classList.add("pulseOk");
+  };
+
+  const ghDeleteHeaders=token=>({
+    "Accept":"application/vnd.github+json",
+    "Authorization":"Bearer "+token,
+    "X-GitHub-Api-Version":"2026-03-10"
+  });
+
+  async function getSharedFileShaForDelete(token){
+    const url=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/contents/${GH_SHARED.path}?ref=${encodeURIComponent(GH_SHARED.branch)}`;
+    const res=await fetch(url,{headers:ghDeleteHeaders(token)});
+    if(res.status===404)return null;
+    if(!res.ok){
+      let msg="";
+      try{msg=(await res.json())?.message||""}catch{}
+      throw Error((msg||"تعذر قراءة data.json من GitHub")+" ("+res.status+")");
+    }
+    const x=await res.json();
+    return x?.sha||null;
+  }
+
+  async function deleteSharedFileFromGithub(token){
+    const sha=await getSharedFileShaForDelete(token);
+    if(!sha)return {alreadyMissing:true,commitSha:""};
+
+    const url=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/contents/${GH_SHARED.path}`;
+    const res=await fetch(url,{
+      method:"DELETE",
+      headers:{
+        ...ghDeleteHeaders(token),
+        "Content-Type":"application/json"
+      },
+      body:JSON.stringify({
+        message:"Delete dashboard shared data "+new Date().toISOString(),
+        sha,
+        branch:GH_SHARED.branch
+      })
+    });
+
+    if(!res.ok){
+      let msg="";
+      try{msg=(await res.json())?.message||""}catch{}
+      if(res.status===401||res.status===403)localStorage.removeItem(GH_SHARED.tokenKey);
+      throw Error((msg||"تعذر حذف data.json من GitHub")+" ("+res.status+")");
+    }
+
+    const x=await res.json();
+    return {alreadyMissing:false,commitSha:x?.commit?.sha||""};
+  }
+
+  async function waitUntilPublicDataIsGone(){
+    const started=Date.now(),timeout=180000;
+    while(Date.now()-started<timeout){
+      try{
+        const res=await fetch("./"+GH_SHARED.path+"?reset_check="+Date.now(),{
+          cache:"no-store",
+          headers:{"Cache-Control":"no-cache","Pragma":"no-cache"}
+        });
+        if(res.status===404)return true;
+      }catch{}
+      await sleep(3000);
+    }
+    throw Error("تم حذف الملف من GitHub لكن نشر GitHub Pages ما زال قيد التنفيذ");
+  }
+
+  async function clearLocalDashboardData(){
+    const empty={schemaVersion:14,updatedAt:null,records:[]};
+    await putLocal(empty);
+    db=empty;
+    ["q","from","to"].forEach(id=>{const el=$(id);if(el)el.value=""});
+    if(typeof ids!=="undefined")ids.forEach(id=>{const el=$(id);if(el)el.selectedIndex=0});
+    fill();
+    apply();
+  }
+
+  // Capture the reset click before every older reset handler in the page.
+  document.addEventListener("click",async e=>{
+    const btn=e.target?.closest?.("#resetData");
+    if(!btn)return;
+
+    e.preventDefault();
+    e.stopImmediatePropagation();
+
+    if(!confirm("هل تريد حذف جميع البلاغات من الداش بورد ومن GitHub للجميع؟"))return;
+
+    try{
+      state("جاري تصفير بيانات البلاغات محليًا…",true);
+      setResetDotMode("busy");
+      await clearLocalDashboardData();
+
+      const token=localStorage.getItem(GH_SHARED.tokenKey)||"";
+      if(!token){
+        state("تم التصفير محليًا • يلزم GitHub Token لحذف data.json");
+        setResetDotMode("warn");
+        return;
+      }
+
+      state("جاري حذف data.json من GitHub…",true);
+      setResetDotMode("busy");
+
+      const result=await deleteSharedFileFromGithub(token);
+
+      if(result.alreadyMissing){
+        state("ملف data.json غير موجود على GitHub • جاري التحقق من الموقع…",true);
+      }else{
+        state("تم حذف data.json من GitHub • جاري انتظار نشر GitHub Pages…",true);
+      }
+      setResetDotMode("warn");
+
+      await waitUntilPublicDataIsGone();
+
+      state("تم تصفير البيانات للجميع • لا توجد بيانات");
+      setResetDotMode("ok");
+    }catch(err){
+      console.error("Final GitHub reset failed",err);
+      state("تم التصفير محليًا • تعذر إكمال التصفير على GitHub: "+err.message);
+      setResetDotMode("error");
+    }
+  },true);
+
+  // Normal loaded state stays pulsing green; progress states are pulsing yellow.
+  setTimeout(()=>{
+    const d=document.getElementById("dot");
+    if(d&&!d.classList.contains("pulseBusy")&&!d.classList.contains("pulseWarn")&&!d.classList.contains("pulseError")){
+      setResetDotMode("ok");
+    }
+  },0);
+})();
+</script>
+
 </body></html>
