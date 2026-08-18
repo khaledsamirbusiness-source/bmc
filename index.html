@@ -1115,4 +1115,206 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
 })();
 </script>
 
+
+<!-- GitHub publish status + pulse indicator + shared reset -->
+<style id="githubPublishStatusPulseStyle">
+#dot{position:relative}
+#dot.pulseOk::after,#dot.pulseBusy::after,#dot.pulseWarn::after,#dot.pulseError::after{
+  content:"";position:absolute;inset:-5px;border-radius:50%;
+  border:2px solid currentColor;opacity:.45;animation:ghPulse 1.5s ease-out infinite
+}
+#dot.pulseOk{color:#19b59f}
+#dot.pulseBusy,#dot.pulseWarn{color:#e4b23b}
+#dot.pulseError{color:#d94e5d}
+@keyframes ghPulse{
+  0%{transform:scale(.65);opacity:.55}
+  70%,100%{transform:scale(1.5);opacity:0}
+}
+</style>
+<script id="githubPublishStatusPulseScript">
+(()=>{
+  const setDotMode=mode=>{
+    const d=document.getElementById("dot");
+    if(!d)return;
+    d.classList.remove("pulseOk","pulseBusy","pulseWarn","pulseError","busy");
+    if(mode==="ok")d.classList.add("pulseOk");
+    else if(mode==="busy")d.classList.add("pulseBusy");
+    else if(mode==="warn")d.classList.add("pulseWarn");
+    else if(mode==="error")d.classList.add("pulseError");
+  };
+
+  const ghHeaders=token=>({
+    "Accept":"application/vnd.github+json",
+    "Authorization":"Bearer "+token,
+    "X-GitHub-Api-Version":"2026-03-10"
+  });
+
+  async function githubPagesBuildStatus(token){
+    const url=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/pages/builds/latest`;
+    const res=await fetch(url,{headers:ghHeaders(token)});
+    if(!res.ok)throw Error("تعذر قراءة حالة GitHub Pages ("+res.status+")");
+    return await res.json();
+  }
+
+  async function waitForPagesPublish(token,commitSha,expectEmpty=false){
+    const timeoutMs=180000,start=Date.now();
+    while(Date.now()-start<timeoutMs){
+      let buildMatched=false;
+      try{
+        const build=await githubPagesBuildStatus(token);
+        const status=String(build?.status||"").toLowerCase();
+        const commit=String(build?.commit||"");
+        if(status==="errored"||status==="error"||status==="failed") throw Error("فشل نشر GitHub Pages");
+        if(status==="built"||status==="success"){
+          buildMatched=!commitSha||!commit||commit.startsWith(String(commitSha).slice(0,7));
+        }
+      }catch(err){
+        console.warn("Pages build status unavailable, falling back to public data check",err);
+      }
+
+      try{
+        const r=await fetch("./"+GH_SHARED.path+"?publish_check="+Date.now(),{cache:"no-store"});
+        if(r.ok){
+          const x=await r.json();
+          if(expectEmpty){
+            if(Array.isArray(x?.records)&&x.records.length===0)return true;
+          }else if(x?.updatedAt&&db?.updatedAt&&String(x.updatedAt)===String(db.updatedAt)){
+            return true;
+          }else if(buildMatched){
+            return true;
+          }
+        }else if(buildMatched){
+          return true;
+        }
+      }catch{
+        if(buildMatched)return true;
+      }
+
+      await new Promise(r=>setTimeout(r,3500));
+    }
+    throw Error("استغرق نشر GitHub Pages وقتًا أطول من المتوقع");
+  }
+
+  async function githubFileSha(token){
+    const url=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/contents/${GH_SHARED.path}?ref=${encodeURIComponent(GH_SHARED.branch)}`;
+    const res=await fetch(url,{headers:ghHeaders(token)});
+    if(res.status===404)return null;
+    if(!res.ok)throw Error("تعذر قراءة ملف البيانات من GitHub ("+res.status+")");
+    const x=await res.json();
+    return x?.sha||null;
+  }
+
+  async function publishEmptySnapshot(token){
+    const empty={schemaVersion:14,updatedAt:new Date().toISOString(),records:[]};
+    const sha=await githubFileSha(token);
+    const body={
+      message:"Reset dashboard shared data "+new Date().toISOString(),
+      content:utf8Base64(JSON.stringify(empty)),
+      branch:GH_SHARED.branch
+    };
+    if(sha)body.sha=sha;
+
+    const url=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/contents/${GH_SHARED.path}`;
+    const res=await fetch(url,{
+      method:"PUT",
+      headers:{...ghHeaders(token),"Content-Type":"application/json"},
+      body:JSON.stringify(body)
+    });
+    if(!res.ok){
+      let msg="";
+      try{msg=(await res.json())?.message||""}catch{}
+      throw Error((msg||"تعذر تصفير البيانات على GitHub")+" ("+res.status+")");
+    }
+    return await res.json();
+  }
+
+  // Replace shared publish so "تم النشر" appears only after GitHub Pages is actually updated.
+  publishSharedSnapshot=async token=>{
+    setDotMode("busy");
+    state("جاري رفع التحديث إلى GitHub…",true);
+
+    const snap=sharedSnapshot();
+    if(!snap.records.length)throw Error("لا توجد بيانات لنشرها");
+
+    const sha=await githubCurrentSha(token);
+    const body={
+      message:"Update dashboard shared data "+new Date().toISOString(),
+      content:utf8Base64(JSON.stringify(snap)),
+      branch:GH_SHARED.branch
+    };
+    if(sha)body.sha=sha;
+
+    const url=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/contents/${GH_SHARED.path}`;
+    const res=await fetch(url,{
+      method:"PUT",
+      headers:{
+        "Accept":"application/vnd.github+json",
+        "Authorization":"Bearer "+token,
+        "X-GitHub-Api-Version":"2026-03-10",
+        "Content-Type":"application/json"
+      },
+      body:JSON.stringify(body)
+    });
+
+    if(!res.ok){
+      let msg="";
+      try{msg=(await res.json())?.message||""}catch{}
+      if(res.status===401||res.status===403)localStorage.removeItem(GH_SHARED.tokenKey);
+      throw Error((msg||"تعذر نشر البيانات على GitHub")+" ("+res.status+")");
+    }
+
+    const result=await res.json();
+    state("تم رفع البيانات إلى GitHub • جاري انتظار نشر الموقع…",true);
+    setDotMode("warn");
+
+    await waitForPagesPublish(token,result?.commit?.sha||"",false);
+
+    state("تم نشر التحديث للجميع • "+fmt(db.updatedAt));
+    setDotMode("ok");
+    return true;
+  };
+
+  setTimeout(()=>{if(db?.records?.length)setDotMode("ok")},500);
+
+  const resetBtn=document.getElementById("resetData");
+  if(resetBtn){
+    resetBtn.addEventListener("click",()=>{
+      setTimeout(async()=>{
+        if(db?.records?.length)return;
+        if(!document.body.classList.contains("admin-mode"))return;
+
+        const token=localStorage.getItem(GH_SHARED.tokenKey)||"";
+        if(!token){
+          state("تم تصفير البيانات محليًا • يلزم GitHub Token لتصفيرها للجميع");
+          setDotMode("warn");
+          return;
+        }
+
+        try{
+          state("جاري تصفير البيانات المشتركة على GitHub…",true);
+          setDotMode("busy");
+
+          const result=await publishEmptySnapshot(token);
+          db={schemaVersion:14,updatedAt:new Date().toISOString(),records:[]};
+          try{await putLocal({schemaVersion:14,updatedAt:db.updatedAt,records:[]})}catch{}
+
+          state("تم تصفير البيانات على GitHub • جاري انتظار نشر الموقع…",true);
+          setDotMode("warn");
+
+          await waitForPagesPublish(token,result?.commit?.sha||"",true);
+
+          state("تم تصفير البيانات للجميع • لا توجد بيانات");
+          setDotMode("ok");
+          fill();apply();
+        }catch(err){
+          console.error("GitHub reset failed",err);
+          state("تم التصفير محليًا • تعذر تصفير GitHub: "+err.message);
+          setDotMode("error");
+        }
+      },0);
+    },true);
+  }
+})();
+</script>
+
 </body></html>
