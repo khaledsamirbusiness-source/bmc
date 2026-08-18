@@ -41,6 +41,9 @@ async function fetchSharedSnapshot(){
  try{
   const url="./"+GH_SHARED.path+"?v="+Date.now();
   const res=await fetch(url,{cache:"no-store"});
+  if(res.status===404){
+   return{schemaVersion:14,updatedAt:null,records:[],__sharedMissing:true};
+  }
   if(!res.ok)return null;
   const x=await res.json();
   return x&&x.schemaVersion===14&&Array.isArray(x.records)?x:null;
@@ -110,13 +113,16 @@ async function importJsonPacket(p){state("جاري استيراد ملف JSON…
 
 async function load(){
  let local=await getLocal(),shared=await fetchSharedSnapshot(),base;
- if(shared?.records?.length){
-  const sharedTime=Date.parse(shared.updatedAt||0)||0,localTime=Date.parse(local?.updatedAt||0)||0;
-  base=sharedTime>=localTime?shared:(local?.records?local:shared);
-  if(base===shared)try{await putLocal(shared)}catch{}
- }else base=local?.records?local:{schemaVersion:14,updatedAt:null,records:[]};
+ if(shared&&shared.schemaVersion===14&&Array.isArray(shared.records)){
+  // Shared GitHub state is authoritative, including an empty file or deleted data.json.
+  base={schemaVersion:14,updatedAt:shared.updatedAt||null,records:shared.records};
+  try{await putLocal(base)}catch{}
+ }else{
+  // Local cache is used only if GitHub cannot be reached at all.
+  base=local?.records?local:{schemaVersion:14,updatedAt:null,records:[]};
+ }
  db={...base,records:(base.records||[]).map(enrich)};
- state(db.records.length?"تم تحديث البيانات • "+fmt(db.updatedAt):"لا توجد بيانات — نفّذ أول تحديث من المنصة");
+ state(db.records.length?"تم تحديث البيانات • "+fmt(db.updatedAt):"لا توجد بيانات");
  fill();apply()
 }
 async function resetImportedData(){if(!confirm("هل تريد حذف جميع البلاغات المستوردة من الداش بورد؟ ستبقى قاعدة البيانات الأساسية كما هي."))return;const empty={schemaVersion:14,updatedAt:null,records:[]};await putLocal(empty);db=empty;["q","from","to"].forEach(x=>$(x).value="");ids.forEach(x=>$(x).selectedIndex=0);fill();apply();state("تم تصفير بيانات البلاغات — قاعدة البيانات الأساسية محفوظة")}
@@ -1316,5 +1322,23 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
   }
 })();
 </script>
+
+
+<style id="alwaysPulseIndicatorFix">
+#dot{position:relative;color:#19b59f}
+#dot::after{
+  content:""!important;
+  position:absolute!important;
+  inset:-5px!important;
+  border-radius:50%!important;
+  border:2px solid currentColor!important;
+  opacity:.5!important;
+  animation:ghPulse 1.5s ease-out infinite!important;
+  pointer-events:none!important;
+}
+#dot.busy,#dot.pulseBusy,#dot.pulseWarn{color:#e4b23b!important}
+#dot.pulseError{color:#d94e5d!important}
+#dot.pulseOk{color:#19b59f!important}
+</style>
 
 </body></html>
