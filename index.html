@@ -17,6 +17,85 @@ function riyadhStamp(v){if(!v)return"";const d=new Date(v);if(isNaN(d))return St
 function openDb(){return new Promise((a,b)=>{let q=indexedDB.open("unifiedSupportDashboard_clean_v4",1);q.onupgradeneeded=()=>q.result.objectStoreNames.contains("data")||q.result.createObjectStore("data");q.onsuccess=()=>a(q.result);q.onerror=()=>b(q.error)})}
 async function getLocal(){try{let d=await openDb();return await new Promise(a=>{let q=d.transaction("data").objectStore("data").get("clean_master_20260816_v15");q.onsuccess=()=>a(q.result?.schemaVersion===14?q.result:null);q.onerror=()=>a(null)})}catch{return null}}
 async function putLocal(v){let d=await openDb();return new Promise((a,b)=>{let q=d.transaction("data","readwrite").objectStore("data").put(v,"clean_master_20260816_v15");q.onsuccess=a;q.onerror=()=>b(q.error)})}
+const GH_SHARED={
+ owner:"khaledsamirbusiness-source",
+ repo:"bmc",
+ branch:"main",
+ path:"data.json",
+ tokenKey:"nbUnifiedSupportGithubTokenV1"
+};
+function rawSnapshotRecords(records){
+ return (records||[]).map(r=>{
+  const{building,gender,supervisor,city,scope,contractor,isMatched,display,...raw}=r||{};
+  return raw;
+ });
+}
+function sharedSnapshot(){
+ return{
+  schemaVersion:14,
+  updatedAt:db?.updatedAt||new Date().toISOString(),
+  records:rawSnapshotRecords(db?.records||[])
+ };
+}
+async function fetchSharedSnapshot(){
+ try{
+  const url="./"+GH_SHARED.path+"?v="+Date.now();
+  const res=await fetch(url,{cache:"no-store"});
+  if(!res.ok)return null;
+  const x=await res.json();
+  return x&&x.schemaVersion===14&&Array.isArray(x.records)?x:null;
+ }catch{return null}
+}
+function utf8Base64(text){
+ const bytes=new TextEncoder().encode(text);
+ let binary="",step=0x8000;
+ for(let i=0;i<bytes.length;i+=step)binary+=String.fromCharCode(...bytes.subarray(i,i+step));
+ return btoa(binary);
+}
+async function githubCurrentSha(token){
+ const url=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/contents/${GH_SHARED.path}?ref=${encodeURIComponent(GH_SHARED.branch)}`;
+ const res=await fetch(url,{headers:{
+  "Accept":"application/vnd.github.object+json",
+  "Authorization":"Bearer "+token,
+  "X-GitHub-Api-Version":"2026-03-10"
+ }});
+ if(res.status===404)return null;
+ if(!res.ok)throw Error("تعذر قراءة ملف البيانات من GitHub ("+res.status+")");
+ const x=await res.json();
+ return x?.sha||null;
+}
+async function publishSharedSnapshot(token){
+ if(!token)throw Error("لم يتم حفظ GitHub Token على هذا الجهاز");
+ const snap=sharedSnapshot();
+ if(!snap.records.length)throw Error("لا توجد بيانات لنشرها");
+ const json=JSON.stringify(snap);
+ const sha=await githubCurrentSha(token);
+ const body={
+  message:"Update dashboard shared data "+new Date().toISOString(),
+  content:utf8Base64(json),
+  branch:GH_SHARED.branch
+ };
+ if(sha)body.sha=sha;
+ const url=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/contents/${GH_SHARED.path}`;
+ const res=await fetch(url,{
+  method:"PUT",
+  headers:{
+   "Accept":"application/vnd.github+json",
+   "Authorization":"Bearer "+token,
+   "X-GitHub-Api-Version":"2026-03-10",
+   "Content-Type":"application/json"
+  },
+  body:JSON.stringify(body)
+ });
+ if(!res.ok){
+  let msg="";
+  try{msg=(await res.json())?.message||""}catch{}
+  if(res.status===401||res.status===403)localStorage.removeItem(GH_SHARED.tokenKey);
+  throw Error((msg||"تعذر نشر البيانات على GitHub")+" ("+res.status+")");
+ }
+ return true;
+}
+
 function state(s,b=false){$("updated").textContent=s;$("dot").classList.toggle("busy",b)}
 const ids=["status","priority","sla","scope","sub1","sub2","supervisor","city","gender","contractor"],fields={status:["status","status"],priority:["priority","priority"],sla:["slmStatus","sla"],scope:["scope"],sub1:["category3"],sub2:["category4"],supervisor:["supervisor"],city:["city"],gender:["gender"],contractor:["contractor"]};function fill(){for(let id of ids){let s=$(id),title=s.options[0].text,v=s.value,[f,t]=fields[id],vals=[...new Set(db.records.map(r=>r[f]).filter(Boolean))].sort((a,b)=>lab(t,a).localeCompare(lab(t,b),"ar"));s.innerHTML=`<option value="">${title}</option>`+vals.map(x=>`<option value="${esc(x)}">${esc(lab(t,x))}</option>`).join("");s.value=v}}
 function apply(){let q=$("q").value.toLowerCase(),from=$("from").value,to=$("to").value;F=db.records.filter(r=>(!q||[r.caseId,r.display,r.building].join(" ").toLowerCase().includes(q))&&ids.every(id=>!$(id).value||r[fields[id][0]]===$(id).value)&&(!from||String(r.createdDate)>=from)&&(!to||String(r.createdDate)<=to));render()}function group(a,f){let m=new Map;for(let r of a){let k=typeof f==="function"?f(r):r[f]||"غير محدد";m.set(k,(m.get(k)||0)+1)}return[...m].sort((a,b)=>b[1]-a[1])}function bars(id,a,t){let max=Math.max(1,...a.map(x=>x[1]));$(id).innerHTML=a.map(([k,v])=>`<div class="bar"><span title="${esc(lab(t,k))}">${esc(lab(t,k))}</span><div class="track"><div class="fill" style="width:${v/max*100}%"></div></div><b>${n(v)}</b></div>`).join("")}
@@ -29,7 +108,17 @@ function flat(o,p="",out={}){if(o&&typeof o==="object"&&!Array.isArray(o))for(le
 async function update(p){state("جاري تحديث البيانات…",true);try{let rows=p.rows||[];if(!rows.length)throw Error("لا توجد بلاغات في التحديث");if(p.partial||rows.length===50)throw Error("تم التقاط أول 50 بلاغًا فقط");let map={...mapping(rows),"1":"caseId","3":"createdDate","6":"modifiedDate","450000029":"requestId","450000167":"category4","450000187":"assignee","450000412":"resolutionDate","450000177":"resolutionDescription","1000000000":"description","1000000064":"category2","1000000065":"category3","1000000164":"priority","536870913":"buildingNumberRaw","536870919":"schoolNumberRaw","536870934":"buildingNamePlatform","536870945":"schoolGenderPlatform","450000191":"needAttention","450000170":"reopened","recordContext._associations.IDGAA5V0GE9Z4AOP6IK3OOKIIY2VU2.nodeA[0].302307031":"status","recordContext._associations.IDGADGG8ECDC0AQAUOIQPZWY9UV0IQ.nodeB[0].304412741":"slmStatus"};if(!Object.values(map).includes("caseId"))throw Error("تعذر التعرف على أعمدة المنصة");let by=new Map(db.records.map(r=>[r.caseId,r]));for(let raw of rows){let f=flat(raw),nr={};for(let[k,name]of Object.entries(map))nr[name]=f[k];if(!nr.caseId)continue;nr.priority=({1000:"Critical",2000:"High",3000:"Medium"})[nr.priority]||nr.priority;nr.slmStatus=({1:"Within Time Limit",2:"Warning",3:"Breached"})[nr.slmStatus]||nr.slmStatus;let old=by.get(nr.caseId)||{},merged={...old,...nr};if(!merged.createdDate||String(merged.createdDate).slice(0,10)>="2026-08-01")by.set(nr.caseId,merged)}let saved={schemaVersion:14,updatedAt:p.capturedAt||new Date().toISOString(),records:[...by.values()]};await putLocal(saved);db={...saved,records:saved.records.map(enrich)};fill();apply();state("تم تحديث البيانات • "+fmt(db.updatedAt))}catch(e){state("تعذر التحديث • "+e.message)}}
 async function importJsonPacket(p){state("جاري استيراد ملف JSON…",true);try{if(!Array.isArray(p?.rows)||!p.rows.length)throw Error("ملف JSON لا يحتوي سجلات");const SLA="recordContext._associations.IDGADGG8ECDC0AQAUOIQPZWY9UV0IQ.nodeB[0].304412741",STATUS="recordContext._associations.IDGAA5V0GE9Z4AOP6IK3OOKIIY2VU2.nodeA[0].302307031",priority={1000:"Critical",2000:"High",3000:"Medium"},slm={1:"Within Time Limit",2:"Warning",3:"Breached"},records=p.rows.map(x=>({caseId:String(x["1"]??"").trim(),requestId:x["450000029"]??null,priority:priority[x["1000000164"]]||String(x["1000000164"]??""),slmStatus:slm[x[SLA]]||String(x[SLA]??""),status:String(x[STATUS]??""),createdDate:x["3"]??null,resolutionDate:x["450000412"]??null,modifiedDate:x["6"]??null,category2:String(x["1000000064"]??""),category3:String(x["1000000065"]??""),category4:String(x["450000167"]??""),assignee:String(x["450000187"]??""),description:String(x["1000000000"]??""),resolutionDescription:String(x["450000177"]??""),approvalJustification:"",cancelJustification:"",buildingNumberRaw:String(x["536870913"]??""),schoolNumberRaw:String(x["536870919"]??""),buildingNamePlatform:String(x["536870934"]??""),schoolGenderPlatform:String(x["536870945"]??""),needAttention:x["450000191"]??null,reopened:x["450000170"]??false,ministryNumber:S.caseMinistryOverrides?.[String(x["1"]??"").trim()]||resolveMasterKey(x["536870919"],x["536870913"])})).filter(r=>r.caseId);if(!records.length)throw Error("لم يتم العثور على أرقام البلاغات");const existing=new Map(db.records.map(r=>[String(r.caseId||"").trim(),r]));let updated=0,added=0;for(const record of records){const key=String(record.caseId||"").trim();if(!key)continue;if(existing.has(key))updated++;else added++;existing.set(key,{...(existing.get(key)||{}),...record})}const mergedRecords=[...existing.values()],saved={schemaVersion:14,updatedAt:p.capturedAt||new Date().toISOString(),records:mergedRecords};await putLocal(saved);db={...saved,records:mergedRecords.map(enrich)};fill();apply();state("تم دمج التحديث • تحديث "+n(updated)+" بلاغ وإضافة "+n(added)+" بلاغ • الإجمالي "+n(mergedRecords.length)+" • "+fmt(db.updatedAt))}catch(e){state("تعذر الاستيراد • "+e.message);throw e}}
 
-async function load(){let l=await getLocal(),base=l?.records?l:{schemaVersion:14,updatedAt:null,records:[]};db={...base,records:base.records.map(enrich)};state(db.records.length?"تم تحديث البيانات • "+fmt(db.updatedAt):"لا توجد بيانات — نفّذ أول تحديث من المنصة");fill();apply()}
+async function load(){
+ let local=await getLocal(),shared=await fetchSharedSnapshot(),base;
+ if(shared?.records?.length){
+  const sharedTime=Date.parse(shared.updatedAt||0)||0,localTime=Date.parse(local?.updatedAt||0)||0;
+  base=sharedTime>=localTime?shared:(local?.records?local:shared);
+  if(base===shared)try{await putLocal(shared)}catch{}
+ }else base=local?.records?local:{schemaVersion:14,updatedAt:null,records:[]};
+ db={...base,records:(base.records||[]).map(enrich)};
+ state(db.records.length?"تم تحديث البيانات • "+fmt(db.updatedAt):"لا توجد بيانات — نفّذ أول تحديث من المنصة");
+ fill();apply()
+}
 async function resetImportedData(){if(!confirm("هل تريد حذف جميع البلاغات المستوردة من الداش بورد؟ ستبقى قاعدة البيانات الأساسية كما هي."))return;const empty={schemaVersion:14,updatedAt:null,records:[]};await putLocal(empty);db=empty;["q","from","to"].forEach(x=>$(x).value="");ids.forEach(x=>$(x).selectedIndex=0);fill();apply();state("تم تصفير بيانات البلاغات — قاعدة البيانات الأساسية محفوظة")}
 window.addEventListener("message",e=>{if(String(e.origin).endsWith(".onbmc.com")&&e.data?.type==="BMC_CASES_UPDATE")update(e.data)});
 ids.forEach(x=>$(x).onchange=apply);["q","from","to"].forEach(x=>$(x)[x==="q"?"oninput":"onchange"]=apply);$("clear").onclick=()=>{["q","from","to"].forEach(x=>$(x).value="");ids.forEach(x=>$(x).selectedIndex=0);apply()};
@@ -798,6 +887,231 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
       });
     },0);
   });
+})();
+</script>
+
+
+<!-- Shared GitHub snapshot: no new buttons; auto-publish after existing admin updates/imports -->
+<style id="githubSharedSyncStyle">
+.githubTokenNote{font-size:12px;color:#71818a;margin:-4px 0 12px;line-height:1.6}
+</style>
+<script id="githubSharedSyncScript">
+(()=>{
+ let tokenDialogOpen=false,publishing=false;
+
+ const askGithubToken=()=>new Promise(resolve=>{
+  if(tokenDialogOpen){resolve(localStorage.getItem(GH_SHARED.tokenKey)||"");return}
+  tokenDialogOpen=true;
+  document.querySelector(".githubTokenOverlay")?.remove();
+  const ov=document.createElement("div");
+  ov.className="adminMenuOverlay githubTokenOverlay";
+  ov.innerHTML=`<div class="adminMenuBox">
+    <h3>ربط تحديثات الداش بورد بـ GitHub</h3>
+    <p>أدخل GitHub API Token مرة واحدة على هذا الجهاز. لن يتم رفع الـToken إلى الموقع أو ملف البيانات.</p>
+    <form class="githubTokenForm">
+      <input class="adminPasswordField githubTokenInput" type="password" autocomplete="off" autofocus placeholder="GitHub Token">
+      <div class="githubTokenNote">يجب أن يمتلك صلاحية Contents: Read and write على مستودع bmc.</div>
+      <div class="adminDialogError"></div>
+      <div class="adminDialogButtons">
+        <button class="adminDialogOk" type="submit">حفظ</button>
+        <button class="adminDialogCancel" type="button">إلغاء</button>
+      </div>
+    </form>
+  </div>`;
+  document.body.appendChild(ov);
+  const input=ov.querySelector(".githubTokenInput"),err=ov.querySelector(".adminDialogError");
+  const finish=v=>{tokenDialogOpen=false;ov.remove();resolve(v)};
+  ov.querySelector(".adminDialogCancel").onclick=()=>finish("");
+  ov.addEventListener("click",e=>{if(e.target===ov)finish("")});
+  ov.querySelector(".githubTokenForm").onsubmit=e=>{
+   e.preventDefault();
+   const token=input.value.trim();
+   if(token.length<20){err.textContent="الـToken غير صالح أو قصير جدًا";return}
+   localStorage.setItem(GH_SHARED.tokenKey,token);
+   finish(token);
+  };
+  setTimeout(()=>input.focus(),0);
+ });
+
+ const getToken=async()=>{
+  let token=localStorage.getItem(GH_SHARED.tokenKey)||"";
+  if(token)return token;
+  if(!document.body.classList.contains("admin-mode"))return "";
+  return await askGithubToken();
+ };
+
+ const publishAfterSuccessfulUpdate=async(beforeStamp)=>{
+  const afterStamp=db?.updatedAt||"";
+  if(!afterStamp||afterStamp===beforeStamp||!db?.records?.length)return;
+  const token=await getToken();
+  if(!token){
+   state("تم تحديث البيانات على هذا الجهاز • يلزم إدخال GitHub Token لنشرها للجميع");
+   return;
+  }
+  if(publishing)return;
+  publishing=true;
+  try{
+   state("تم تحديث البيانات • جاري مزامنة النسخة المشتركة…",true);
+   await publishSharedSnapshot(token);
+   state("تم تحديث البيانات ونشرها للجميع • "+fmt(db.updatedAt));
+  }catch(e){
+   console.error("GitHub shared-data publish failed",e);
+   state("تم تحديث البيانات محليًا • تعذر نشرها للجميع: "+e.message);
+   if(!localStorage.getItem(GH_SHARED.tokenKey)&&document.body.classList.contains("admin-mode")){
+    setTimeout(()=>askGithubToken(),100);
+   }
+  }finally{
+   publishing=false;
+   $("dot")?.classList.remove("busy");
+  }
+ };
+
+ // Wrap the CURRENT functions after all previous dashboard patches.
+ const updateBeforeShared=update;
+ update=async p=>{
+  const before=db?.updatedAt||"";
+  const result=await updateBeforeShared(p);
+  await publishAfterSuccessfulUpdate(before);
+  return result;
+ };
+
+ const importBeforeShared=importJsonPacket;
+ importJsonPacket=async p=>{
+  const before=db?.updatedAt||"";
+  const result=await importBeforeShared(p);
+  await publishAfterSuccessfulUpdate(before);
+  return result;
+ };
+
+ // First successful admin login: request token only if this device has none.
+ const watchAdmin=new MutationObserver(()=>{
+  if(document.body.classList.contains("admin-mode")&&!localStorage.getItem(GH_SHARED.tokenKey)&&!tokenDialogOpen){
+   setTimeout(()=>{if(document.body.classList.contains("admin-mode"))askGithubToken()},120);
+  }
+ });
+ watchAdmin.observe(document.body,{attributes:true,attributeFilter:["class"]});
+})();
+</script>
+
+
+<!-- Stable filtered ticket scrolling: append rows without resetting scroll or escaping current filter -->
+<script id="ticketScrollStableFix">
+(()=>{
+  const scroller=document.querySelector(".ticketTableWrap");
+  const tbody=document.getElementById("tr");
+  if(!scroller||!tbody)return;
+
+  let activeRowsRef=null;
+  let visibleLimit=250;
+  let renderedCount=0;
+  let rendering=false;
+
+  const flagText=v=>{
+    if(v===true||v===1)return "نعم";
+    if(v===false||v===0||v==null)return "لا";
+    const x=String(v).trim().toLowerCase();
+    if(!x||["0","false","no","n","لا","none","null","undefined"].includes(x))return "لا";
+    if(["1","true","yes","y","نعم"].includes(x))return "نعم";
+    const num=Number(x);
+    return Number.isFinite(num)?(num!==0?"نعم":"لا"):"نعم";
+  };
+
+  const caseUrl=r=>r?.recordId
+    ?`https://usc-is.onbmc.com/helix/index.html#/com.bmc.dsm.bwfa/view/com.bmc.dsm.case-lib:Case%20Edit?Case%20ID=${encodeURIComponent(r.recordId)}`
+    :"";
+
+  const rowHtml=r=>{
+    const url=caseUrl(r);
+    const caseCell=url
+      ?`<a href="${url}" target="_blank" rel="noopener noreferrer" title="فتح البلاغ في منصة الدعم" style="color:#079a9b;font-weight:700;text-decoration:none">${esc(r.caseId)}</a>`
+      :esc(r.caseId);
+
+    return `<tr>
+      <td>${caseCell}</td>
+      <td>${esc(lab("priority",r.priority))}</td>
+      <td>${esc(lab("status",r.status))}</td>
+      <td>${ticketSlaBadge(r)}</td>
+      <td>${esc(flagText(r.needAttention))}</td>
+      <td>${esc(flagText(r.reopened))}</td>
+      <td>${esc(r.supervisor)}</td>
+      <td>${esc(r.contractor)}</td>
+      <td>${esc(r.scope||mainScope(r.category2)||"—")}</td>
+      <td>${fmt(r.createdDate)}</td>
+      <td>${esc(r.building)}</td>
+      <td>${esc(r.display)}</td>
+      <td>${esc(r.gender)}</td>
+      <td class="ticketDescription" title="${esc(r.description)}">${esc(r.description||"—")}</td>
+    </tr>`;
+  };
+
+  const renderStable=()=>{
+    if(rendering)return;
+    if(!$("tickets")||$("tickets").classList.contains("hidden"))return;
+    if(typeof F==="undefined"||!Array.isArray(F))return;
+
+    rendering=true;
+    try{
+      const filterChanged=F!==activeRowsRef;
+
+      if(filterChanged){
+        activeRowsRef=F;
+        visibleLimit=250;
+        renderedCount=0;
+        tbody.innerHTML="";
+        scroller.scrollTop=0;
+      }
+
+      const desired=Math.min(visibleLimit,F.length);
+
+      // If another existing renderer replaced the rows, normalize once to the current filtered slice.
+      if(tbody.children.length!==renderedCount || desired<renderedCount){
+        tbody.innerHTML=F.slice(0,desired).map(rowHtml).join("");
+        renderedCount=desired;
+      }else if(desired>renderedCount){
+        // Append only the next filtered batch. This preserves the current scrollbar position.
+        tbody.insertAdjacentHTML("beforeend",F.slice(renderedCount,desired).map(rowHtml).join(""));
+        renderedCount=desired;
+      }
+
+      $("tc").textContent=n(F.length);
+      $("ticketShown").textContent=F.length
+        ?`عرض ${n(desired)} من ${n(F.length)} بلاغ`
+        :"لا توجد بلاغات مطابقة";
+    }finally{
+      rendering=false;
+    }
+  };
+
+  // Make all later table refreshes use the stable renderer.
+  window.renderTicketTab=renderStable;
+  window.renderTickets=renderStable;
+
+  // Capture the scroll before the older anonymous listeners.
+  // This prevents the old dual-limit handlers from redrawing the entire table.
+  scroller.addEventListener("scroll",e=>{
+    e.stopImmediatePropagation();
+    if(rendering||F!==activeRowsRef){
+      renderStable();
+      return;
+    }
+
+    const nearBottom=scroller.scrollTop+scroller.clientHeight>=scroller.scrollHeight-120;
+    if(nearBottom && visibleLimit<F.length){
+      visibleLimit=Math.min(visibleLimit+250,F.length);
+      renderStable();
+    }
+  },{capture:true,passive:true});
+
+  // Existing filter logic already changes F. When it does, this resets to the first 250
+  // of the NEW filtered result, never to unfiltered records.
+  const refreshAfterFilter=()=>{
+    if(F!==activeRowsRef)setTimeout(renderStable,0);
+  };
+  document.addEventListener("change",refreshAfterFilter,true);
+  document.addEventListener("input",refreshAfterFilter,true);
+  document.addEventListener("click",refreshAfterFilter,true);
+
+  setTimeout(renderStable,0);
 })();
 </script>
 
