@@ -1669,10 +1669,12 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
   });
 
   async function extensionStatus(){
+    const marker=document.documentElement.getAttribute("data-bmc-attachments-extension")==="1";
     try{
-      return await extRequest("status",{},3000);
+      const s=await extRequest("status",{},5000);
+      return {...s,extension:true};
     }catch{
-      return {extension:false,bmcOpen:false};
+      return {extension:marker,bmcOpen:false,bridgeUnavailable:true};
     }
   }
 
@@ -1768,7 +1770,12 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
       const status=await extensionStatus();
 
       if(!status?.extension){
-        alert("إضافة BMC Attachments غير مثبتة على هذا المتصفح. ثبّت الإضافة مرة واحدة ثم أعد تحميل الصفحة.");
+        alert("لم يتم تحميل إضافة BMC Attachments داخل صفحة الداش بورد. بعد تثبيت/تحديث الإضافة اعمل Refresh كامل للصفحة (Ctrl+F5) ثم جرّب مرة أخرى.");
+        return;
+      }
+
+      if(status?.bridgeUnavailable){
+        alert("الإضافة مثبتة لكن الاتصال بها لم يبدأ داخل هذه الصفحة. اعمل Refresh كامل للداش بورد (Ctrl+F5) ثم جرّب مرة أخرى.");
         return;
       }
 
