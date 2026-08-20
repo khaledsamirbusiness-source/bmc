@@ -1719,47 +1719,241 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
     return btoa(binary);
   };
 
-  async function githubPathSha(path,token){
-    const url=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/contents/${apiPath(path)}?ref=${encodeURIComponent(GH_SHARED.branch)}`;
-    const res=await fetch(url,{headers:{
-      "Accept":"application/vnd.github+json",
-      "Authorization":"Bearer "+token,
-      "X-GitHub-Api-Version":"2026-03-10"
-    }});
-    if(res.status===404)return null;
-    if(!res.ok)throw Error("تعذر قراءة ملف المرفق من GitHub ("+res.status+")");
-    const x=await res.json();
-    return x?.sha||null;
-  }
+  const canvasBlob=(canvas,type,quality)=>new Promise((resolve,reject)=>{
+    canvas.toBlob(b=>b?resolve(b):reject(new Error("تعذر ضغط الصورة")),type,quality);
+  });
 
-  async function uploadAttachmentFile(path,buffer,token){
-    const sha=await githubPathSha(path,token);
-    const body={
-      message:"Update ticket attachment "+new Date().toISOString(),
-      content:bytesBase64(buffer),
-      branch:GH_SHARED.branch
-    };
-    if(sha)body.sha=sha;
-    const url=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/contents/${apiPath(path)}`;
-    const res=await fetch(url,{
-      method:"PUT",
-      headers:{
-        "Accept":"application/vnd.github+json",
-        "Authorization":"Bearer "+token,
-        "X-GitHub-Api-Version":"2026-03-10",
-        "Content-Type":"application/json"
-      },
-      body:JSON.stringify(body)
-    });
-    if(!res.ok){
-      let msg="";
-      try{msg=(await res.json())?.message||""}catch{}
-      throw Error((msg||"تعذر رفع المرفق إلى GitHub")+" ("+res.status+")");
+  async function compressAttachment(binary,attachment){
+    const originalType=String(binary.mediaType||attachment.mediaType||"application/octet-stream").toLowerCase();
+    const originalBuffer=binary.buffer;
+    const originalBytes=originalBuffer?.byteLength||0;
+
+    // Non-images stay unchanged.
+    if(!originalType.startsWith("image/") || originalType==="image/gif" || originalType==="image/svg+xml"){
+      return{
+        buffer:originalBuffer,
+        mediaType:originalType,
+        extension:(String(attachment.name||"").split(".").pop()||"bin").toLowerCase(),
+        originalBytes,
+        finalBytes:originalBytes,
+        compressed:false
+      };
+    }
+
+    // Very small images do not need recompression.
+    if(originalBytes && originalBytes<=180*1024){
+      return{
+        buffer:originalBuffer,
+        mediaType:originalType,
+        extension:(originalType.includes("png")?"png":originalType.includes("webp")?"webp":"jpg"),
+        originalBytes,
+        finalBytes:originalBytes,
+        compressed:false
+      };
+    }
+
+    try{
+      const blob=new Blob([originalBuffer],{type:originalType});
+      const bitmap=await createImageBitmap(blob);
+      const maxSide=1100;
+      const scale=Math.min(1,maxSide/Math.max(bitmap.width,bitmap.height));
+      let w=Math.max(1,Math.round(bitmap.width*scale));
+      let h=Math.max(1,Math.round(bitmap.height*scale));
+
+      const canvas=document.createElement("canvas");
+      canvas.width=w;canvas.height=h;
+      const ctx=canvas.getContext("2d",{alpha:false});
+      ctx.drawImage(bitmap,0,0,w,h);
+      bitmap.close?.();
+
+      const target=180*1024;
+      let quality=.70;
+      let outBlob=await canvasBlob(canvas,"image/webp",quality);
+
+      // Reduce quality first.
+      for(const q of [.62,.54,.46]){
+        if(outBlob.size<=target)break;
+        quality=q;
+        outBlob=await canvasBlob(canvas,"image/webp",quality);
+      }
+
+      // If still too large, reduce dimensions once more.
+      if(outBlob.size>target*1.35 && Math.max(w,h)>850){
+        const ratio=850/Math.max(w,h);
+        const w2=Math.max(1,Math.round(w*ratio));
+        const h2=Math.max(1,Math.round(h*ratio));
+        const c2=document.createElement("canvas");
+        c2.width=w2;c2.height=h2;
+        c2.getContext("2d",{alpha:false}).drawImage(canvas,0,0,w2,h2);
+        outBlob=await canvasBlob(c2,"image/webp",.55);
+      }
+
+      const outBuffer=await outBlob.arrayBuffer();
+      return{
+        buffer:outBuffer,
+        mediaType:"image/webp",
+        extension:"webp",
+        originalBytes,
+        finalBytes:outBuffer.byteLength,
+        compressed:true
+      };
+    }catch(err){
+      console.warn("Image compression fallback:",err);
+      return{
+        buffer:originalBuffer,
+        mediaType:originalType,
+        extension:(originalType.includes("png")?"png":originalType.includes("webp")?"webp":"jpg"),
+        originalBytes,
+        finalBytes:originalBytes,
+        compressed:false
+      };
     }
   }
 
-  async function syncOneRecordAttachments(record,token){
+  class GitAttachmentBatchUploader{
+    constructor(token){
+      this.token=token;
+      this.queue=[];
+      this.timer=null;
+      this.chain=Promise.resolve();
+      this.headSha=null;
+      this.treeSha=null;
+      this.totalFiles=0;
+      this.totalBytes=0;
+    }
+
+    headers(){
+      return{
+        "Accept":"application/vnd.github+json",
+        "Authorization":"Bearer "+this.token,
+        "X-GitHub-Api-Version":"2026-03-10",
+        "Content-Type":"application/json"
+      };
+    }
+
+    async init(){
+      if(this.headSha&&this.treeSha)return;
+      const refUrl=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/git/ref/heads/${encodeURIComponent(GH_SHARED.branch)}`;
+      const refRes=await fetch(refUrl,{headers:this.headers()});
+      if(!refRes.ok)throw Error("تعذر قراءة فرع GitHub ("+refRes.status+")");
+      const ref=await refRes.json();
+      this.headSha=ref?.object?.sha;
+      if(!this.headSha)throw Error("تعذر تحديد آخر Commit");
+
+      const commitUrl=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/git/commits/${this.headSha}`;
+      const commitRes=await fetch(commitUrl,{headers:this.headers()});
+      if(!commitRes.ok)throw Error("تعذر قراءة Commit الحالي ("+commitRes.status+")");
+      const commit=await commitRes.json();
+      this.treeSha=commit?.tree?.sha;
+      if(!this.treeSha)throw Error("تعذر تحديد Git Tree");
+    }
+
+    async createBlob(buffer){
+      const url=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/git/blobs`;
+      const res=await fetch(url,{
+        method:"POST",
+        headers:this.headers(),
+        body:JSON.stringify({content:bytesBase64(buffer),encoding:"base64"})
+      });
+      if(!res.ok){
+        let msg="";
+        try{msg=(await res.json())?.message||""}catch{}
+        throw Error((msg||"تعذر إنشاء ملف المرفق")+" ("+res.status+")");
+      }
+      return (await res.json()).sha;
+    }
+
+    enqueue(path,buffer){
+      return new Promise((resolve,reject)=>{
+        this.queue.push({path,buffer,resolve,reject});
+        if(this.queue.length>=18)this.flush();
+        else if(!this.timer)this.timer=setTimeout(()=>this.flush(),450);
+      });
+    }
+
+    flush(){
+      if(this.timer){clearTimeout(this.timer);this.timer=null}
+      if(!this.queue.length)return this.chain;
+
+      const batch=this.queue.splice(0,18);
+      this.chain=this.chain.then(()=>this.commitBatch(batch)).catch(err=>{
+        batch.forEach(x=>x.reject(err));
+        throw err;
+      });
+      return this.chain;
+    }
+
+    async commitBatch(batch){
+      await this.init();
+
+      // Blob creation is the only per-file GitHub request; do 8 concurrently.
+      const blobShas=new Array(batch.length);
+      let cursor=0;
+      const blobWorker=async()=>{
+        while(cursor<batch.length){
+          const i=cursor++;
+          blobShas[i]=await this.createBlob(batch[i].buffer);
+        }
+      };
+      await Promise.all(Array.from({length:Math.min(8,batch.length)},blobWorker));
+
+      const treeUrl=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/git/trees`;
+      const treeRes=await fetch(treeUrl,{
+        method:"POST",
+        headers:this.headers(),
+        body:JSON.stringify({
+          base_tree:this.treeSha,
+          tree:batch.map((x,i)=>({
+            path:x.path,
+            mode:"100644",
+            type:"blob",
+            sha:blobShas[i]
+          }))
+        })
+      });
+      if(!treeRes.ok)throw Error("تعذر إنشاء دفعة المرفقات ("+treeRes.status+")");
+      const newTree=(await treeRes.json()).sha;
+
+      const commitUrl=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/git/commits`;
+      const commitRes=await fetch(commitUrl,{
+        method:"POST",
+        headers:this.headers(),
+        body:JSON.stringify({
+          message:`Update ${batch.length} ticket attachments ${new Date().toISOString()}`,
+          tree:newTree,
+          parents:[this.headSha]
+        })
+      });
+      if(!commitRes.ok)throw Error("تعذر إنشاء Commit للمرفقات ("+commitRes.status+")");
+      const newCommit=(await commitRes.json()).sha;
+
+      const refUrl=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/git/refs/heads/${encodeURIComponent(GH_SHARED.branch)}`;
+      const refRes=await fetch(refUrl,{
+        method:"PATCH",
+        headers:this.headers(),
+        body:JSON.stringify({sha:newCommit,force:false})
+      });
+      if(!refRes.ok)throw Error("تعذر نشر دفعة المرفقات ("+refRes.status+")");
+
+      this.headSha=newCommit;
+      this.treeSha=newTree;
+      for(const x of batch){
+        this.totalFiles++;
+        this.totalBytes+=x.buffer.byteLength||0;
+        x.resolve(true);
+      }
+    }
+
+    async finish(){
+      this.flush();
+      await this.chain;
+      return{files:this.totalFiles,bytes:this.totalBytes};
+    }
+  }
+
+  async function syncOneRecordAttachments(record,token,uploader,stats){
     if(!record?.recordId)return null;
+
     const items=await fetchAttachmentMetadata(record.recordId);
     const old=Array.isArray(record.sharedAttachments)?record.sharedAttachments:[];
     const oldById=new Map(old.map(x=>[String(x.id||""),x]));
@@ -1768,22 +1962,37 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
     for(const a of items){
       const id=String(a.id||a.instanceId||"");
       if(!id)continue;
+
       const prev=oldById.get(id);
       if(prev?.path){
         shared.push(prev);
+        stats.skipped++;
         continue;
       }
-      const name=a.name||"مرفق";
-      const path=`attachments/${String(record.caseId||"unknown")}/${id}_${safeName(name)}`;
+
+      const originalName=a.name||"مرفق";
       const binary=await fetchAttachmentBinary(a);
-      await uploadAttachmentFile(path,binary.buffer,token);
+      const packed=await compressAttachment(binary,a);
+
+      stats.originalBytes+=packed.originalBytes||0;
+      stats.finalBytes+=packed.finalBytes||0;
+      if(packed.compressed)stats.compressed++;
+
+      const stem=safeName(originalName.replace(/\.[^.]+$/,""));
+      const path=`attachments/${String(record.caseId||"unknown")}/${id}_${stem}.${packed.extension}`;
+
+      await uploader.enqueue(path,packed.buffer);
+
       shared.push({
         id,
-        name,
-        mediaType:binary.mediaType||a.mediaType||"",
+        name:originalName,
+        mediaType:packed.mediaType||a.mediaType||"",
         path,
-        url:"./"+path
+        url:"./"+path,
+        originalBytes:packed.originalBytes||0,
+        storedBytes:packed.finalBytes||0
       });
+      stats.uploaded++;
     }
     return shared;
   }
@@ -1798,40 +2007,72 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
   }
 
   async function syncChangedAttachments(records){
-    if(!records.length)return {synced:0,failed:0};
+    if(!records.length)return {synced:0,failed:0,uploaded:0,compressed:0,skipped:0,savedPct:0};
+
     const token=localStorage.getItem(GH_SHARED.tokenKey)||"";
     if(!token)throw Error("GITHUB_TOKEN_MISSING");
     if(!bridgeTarget())throw Error("BRIDGE_NOT_READY");
 
-    let synced=0,failed=0;
+    const uploader=new GitAttachmentBatchUploader(token);
+    const stats={
+      synced:0,failed:0,uploaded:0,compressed:0,skipped:0,
+      originalBytes:0,finalBytes:0
+    };
+
     const queue=[...records];
     const total=queue.length;
+    let processed=0;
 
     const worker=async()=>{
       while(queue.length){
         const record=queue.shift();
-        const index=synced+failed+1;
-        setAttachmentProgress(`جاري مزامنة مرفقات البلاغات • ${index} من ${total}…`,"busy");
+        if(!record)break;
+
+        const current=++processed;
+        setAttachmentProgress(
+          `جاري مزامنة المرفقات • ${current} من ${total} • تم رفع ${stats.uploaded} ملف…`,
+          "busy"
+        );
+
         try{
-          const list=await syncOneRecordAttachments(record,token);
+          const list=await syncOneRecordAttachments(record,token,uploader,stats);
           if(list!==null){
             record.sharedAttachments=list;
-            synced++;
+            stats.synced++;
           }
         }catch(err){
           console.error("Attachment sync failed for",record?.caseId,err);
-          failed++;
+          stats.failed++;
         }
       }
     };
 
-    await Promise.all([worker(),worker()]);
+    // Six records in parallel: much faster without overwhelming BMC/browser.
+    await Promise.all(Array.from({length:Math.min(6,total)},worker));
+
+    setAttachmentProgress(
+      `جاري إنهاء رفع المرفقات • ${stats.uploaded} ملف…`,
+      "busy"
+    );
+    await uploader.finish();
+
     await persistAttachmentMetadata();
 
-    setAttachmentProgress("تم رفع المرفقات • جاري نشر بيانات المرفقات للجميع…","warn");
+    setAttachmentProgress("تم رفع المرفقات • جاري نشر الفهرس للجميع…","warn");
     await publishSharedSnapshot(token);
 
-    return {synced,failed};
+    const savedPct=stats.originalBytes
+      ?Math.max(0,Math.round((1-stats.finalBytes/stats.originalBytes)*100))
+      :0;
+
+    return{
+      synced:stats.synced,
+      failed:stats.failed,
+      uploaded:stats.uploaded,
+      compressed:stats.compressed,
+      skipped:stats.skipped,
+      savedPct
+    };
   }
 
   const close=()=>document.querySelector(".ticketAttachmentOverlay")?.remove();
@@ -1896,7 +2137,10 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
       btn.textContent="جاري…";
 
       try{
-        record.sharedAttachments=await syncOneRecordAttachments(record,token)||[];
+        const uploader=new GitAttachmentBatchUploader(token);
+        const stats={uploaded:0,compressed:0,skipped:0,originalBytes:0,finalBytes:0};
+        record.sharedAttachments=await syncOneRecordAttachments(record,token,uploader,stats)||[];
+        await uploader.finish();
         await persistAttachmentMetadata();
         await publishSharedSnapshot(token);
         show(caseId,record.sharedAttachments);
@@ -1918,7 +2162,10 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
     const before=new Map(
       (db.records||[]).map(r=>[
         String(r.caseId||""),
-        String(r.modifiedDate||"")
+        {
+          modified:String(r.modifiedDate||""),
+          sharedAttachments:Array.isArray(r.sharedAttachments)?r.sharedAttachments:null
+        }
       ])
     );
 
@@ -1929,10 +2176,18 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
       const caseId=String(x?.["1"]??"").trim();
       if(!caseId)return;
       const modified=String(x?.["6"]??"");
-      if(!before.has(caseId)||before.get(caseId)!==modified)changedIds.add(caseId);
+      if(!before.has(caseId)||before.get(caseId).modified!==modified)changedIds.add(caseId);
     });
 
     const result=await importWithSharedAttachments(p);
+
+    // Keep previously published attachment links; only fetch truly new attachment IDs.
+    for(const r of (db.records||[])){
+      const prev=before.get(String(r.caseId||""));
+      if(prev?.sharedAttachments && !Array.isArray(r.sharedAttachments)){
+        r.sharedAttachments=prev.sharedAttachments;
+      }
+    }
 
     const changed=(db.records||[]).filter(r=>
       changedIds.has(String(r.caseId||"")) && r.recordId
@@ -1944,8 +2199,8 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
         const x=await syncChangedAttachments(changed);
         setAttachmentProgress(
           x.failed
-            ? `تم نشر التحديث والمرفقات • نجح ${x.synced} وتعذر ${x.failed}`
-            : `تم نشر التحديث والمرفقات للجميع • ${x.synced} بلاغ`,
+            ? `تم نشر المرفقات • ${x.uploaded} ملف • توفير ${x.savedPct}% • تعذر ${x.failed} بلاغ`
+            : `تم نشر المرفقات للجميع • ${x.uploaded} ملف • توفير ${x.savedPct}% من الحجم`,
           x.failed?"warn":"ok"
         );
       }catch(err){
