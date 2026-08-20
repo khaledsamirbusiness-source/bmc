@@ -1115,6 +1115,7 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
       <td>${esc(r.display)}</td>
       <td>${esc(r.gender)}</td>
       <td class="ticketDescription" title="${esc(r.description)}">${esc(r.description||"—")}</td>
+      <td class="ticketAttachments"><button class="attachmentViewBtn" type="button" data-record-id="${esc(r.recordId||"")}" data-case-id="${esc(r.caseId||"")}" ${r.recordId?"":"disabled"}>عرض</button></td>
     </tr>`;
   };
 
@@ -1574,6 +1575,159 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
       setResetDotMode("ok");
     }
   },0);
+})();
+</script>
+
+
+<!-- Attachments column only -->
+<style id="ticketAttachmentsOnlyStyle">
+.ticketAttachments{text-align:center}
+.attachmentViewBtn{
+  border:1px solid #0aa095;background:#fff;color:#087d76;border-radius:7px;
+  padding:5px 9px;font:inherit;font-size:10px;font-weight:800;cursor:pointer;
+  white-space:nowrap;transition:.18s
+}
+.attachmentViewBtn:hover{background:#eaf8f6}
+.attachmentViewBtn:disabled{opacity:.4;cursor:not-allowed}
+.attachmentViewBtn.loading{pointer-events:none;opacity:.65}
+.ticketAttachmentOverlay{
+  position:fixed;inset:0;background:rgba(10,24,31,.72);z-index:99999;
+  display:flex;align-items:center;justify-content:center;padding:22px
+}
+.ticketAttachmentModal{
+  width:min(1180px,96vw);max-height:92vh;overflow:auto;background:#fff;
+  border-radius:16px;box-shadow:0 22px 70px rgba(0,0,0,.3);padding:18px;direction:rtl
+}
+.ticketAttachmentHead{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}
+.ticketAttachmentHead h3{margin:0;font-size:18px;color:#20323b}
+.ticketAttachmentClose{
+  border:0;background:#eef3f5;border-radius:10px;width:38px;height:38px;
+  font-size:22px;cursor:pointer;color:#243640
+}
+.ticketAttachmentInfo{font-size:12px;color:#6d7f87;margin:0 0 12px}
+.ticketAttachmentGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.ticketAttachmentCard{border:1px solid #dfe8eb;border-radius:12px;overflow:hidden;background:#f7fafb}
+.ticketAttachmentCard img{width:100%;height:410px;object-fit:contain;display:block;background:#eef3f5}
+.ticketAttachmentName{padding:9px 10px;font-size:12px;color:#425761;text-align:center;background:#fff}
+.ticketAttachmentEmpty{padding:36px;text-align:center;color:#6d7f87;border:1px dashed #ccd9dd;border-radius:12px}
+@media(max-width:700px){
+ .ticketTable td:nth-child(15):before{content:"المرفقات"!important}
+ .ticketAttachmentGrid{grid-template-columns:1fr}
+ .ticketAttachmentCard img{height:340px}
+}
+</style>
+
+<script id="ticketAttachmentsOnlyScript">
+(()=>{
+  const TEMPLATE_ID="AGGDIJUYHUJIEASYD2L6SYD2L68IJT";
+  const dynamicBase="https://usc-is.onbmc.com/api/com.bmc.dsm.ticketing-lib/dynamicdata/data/definition/com.bmc.dsm.case-lib:Case/";
+  const attachmentBase="https://usc-is.onbmc.com/api/com.bmc.dsm.attachment-service-lib/rx/application/v1/attachment/file/";
+  const cache=new Map();
+
+  const ensureHeader=()=>{
+    const row=document.querySelector("#tickets .ticketTable thead tr");
+    if(!row)return;
+    if(![...row.children].some(th=>th.textContent.trim()==="المرفقات")){
+      const th=document.createElement("th");
+      th.textContent="المرفقات";
+      th.setAttribute("data-extra","attachments");
+      row.appendChild(th);
+    }
+  };
+
+  const escapeHtml=v=>String(v??"")
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+
+  async function getAttachments(recordId){
+    if(cache.has(recordId))return cache.get(recordId);
+
+    const url=`${dynamicBase}${encodeURIComponent(recordId)}?templateId=${encodeURIComponent(TEMPLATE_ID)}&shouldSkipListOptions=true`;
+    const res=await fetch(url,{
+      credentials:"include",
+      cache:"no-store",
+      headers:{"Accept":"application/json"}
+    });
+    if(!res.ok)throw Error("BMC "+res.status);
+
+    const data=await res.json();
+    const defs=Array.isArray(data?.attributeDefinitions)?data.attributeDefinitions:[];
+    const list=defs.flatMap(d=>
+      d?.dataType==="ATTACHMENT" && Array.isArray(d.value) ? d.value : []
+    ).filter(a=>a&&(a.id||a.instanceId)&&a.relatedRI);
+
+    cache.set(recordId,list);
+    return list;
+  }
+
+  const attachmentUrl=a=>{
+    const id=a.id||a.instanceId||"";
+    const rd=a.relatedRD||"com.bmc.dsm.ticketing-lib:DynamicData";
+    const ri=a.relatedRI||"";
+    return `${attachmentBase}${encodeURIComponent(id)}?sourceRecordDef=${encodeURIComponent(rd)}&sourceRecordId=${encodeURIComponent(ri)}&operation=preview`;
+  };
+
+  const close=()=>document.querySelector(".ticketAttachmentOverlay")?.remove();
+
+  const show=(caseId,items)=>{
+    close();
+    const ov=document.createElement("div");
+    ov.className="ticketAttachmentOverlay";
+
+    const cards=items.length
+      ? `<div class="ticketAttachmentGrid">${items.map(a=>{
+          const name=escapeHtml(a.name||"مرفق");
+          const url=escapeHtml(attachmentUrl(a));
+          const isImage=String(a.mediaType||"").toLowerCase().startsWith("image/");
+          return `<div class="ticketAttachmentCard">${
+            isImage
+              ? `<img src="${url}" alt="${name}" loading="lazy" referrerpolicy="strict-origin-when-cross-origin">`
+              : `<div style="padding:30px;text-align:center"><a href="${url}" target="_blank" rel="noopener noreferrer">فتح ${name}</a></div>`
+          }<div class="ticketAttachmentName">${name}</div></div>`;
+        }).join("")}</div>`
+      : `<div class="ticketAttachmentEmpty">لا توجد مرفقات على هذا البلاغ.</div>`;
+
+    ov.innerHTML=`<div class="ticketAttachmentModal">
+      <div class="ticketAttachmentHead">
+        <h3>مرفقات البلاغ — ${escapeHtml(caseId)}</h3>
+        <button class="ticketAttachmentClose" type="button">×</button>
+      </div>
+      <p class="ticketAttachmentInfo">يتم تحميل الصور مباشرة من منصة BMC، لذلك يلزم تسجيل الدخول إلى BMC على نفس المتصفح.</p>
+      ${cards}
+    </div>`;
+
+    document.body.appendChild(ov);
+    ov.querySelector(".ticketAttachmentClose").onclick=close;
+    ov.addEventListener("click",e=>{if(e.target===ov)close()});
+  };
+
+  ensureHeader();
+
+  document.addEventListener("click",async e=>{
+    const btn=e.target?.closest?.(".attachmentViewBtn");
+    if(!btn)return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const recordId=btn.dataset.recordId||"";
+    const caseId=btn.dataset.caseId||"";
+    if(!recordId)return;
+
+    const oldText=btn.textContent;
+    btn.classList.add("loading");
+    btn.textContent="جاري…";
+
+    try{
+      show(caseId,await getAttachments(recordId));
+    }catch(err){
+      console.error("Attachment viewer:",err);
+      alert("تعذر قراءة مرفقات البلاغ. تأكد أنك مسجل الدخول إلى منصة BMC على نفس المتصفح.");
+    }finally{
+      btn.classList.remove("loading");
+      btn.textContent=oldText;
+    }
+  },true);
 })();
 </script>
 
