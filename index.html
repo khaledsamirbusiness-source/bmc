@@ -1629,41 +1629,36 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
 .ticketTable{min-width:0!important;width:100%!important}.ticketTable th:nth-child(14){width:17%!important}.ticketTable th:nth-child(15){width:7%!important}.ticketAttachments{text-align:center!important;vertical-align:middle!important}.attachmentViewBtn{min-width:54px;border:1px solid #0aa095;background:#fff;color:#087d76;border-radius:7px;padding:6px 9px;font:inherit;font-size:10px;font-weight:800;cursor:pointer;white-space:nowrap}.attachmentViewBtn:hover{background:#eaf8f6}.attachmentViewBtn:disabled{opacity:.4;cursor:not-allowed}.attachmentViewBtn.loading{pointer-events:none;opacity:.65}.ticketAttachmentOverlay{position:fixed;inset:0;background:rgba(10,24,31,.72);z-index:99999;display:flex;align-items:center;justify-content:center;padding:22px}.ticketAttachmentModal{width:min(1180px,96vw);max-height:92vh;overflow:auto;background:#fff;border-radius:16px;box-shadow:0 22px 70px rgba(0,0,0,.3);padding:18px;direction:rtl}.ticketAttachmentHead{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}.ticketAttachmentHead h3{margin:0;font-size:18px;color:#20323b}.ticketAttachmentClose{border:0;background:#eef3f5;border-radius:10px;width:38px;height:38px;font-size:22px;cursor:pointer;color:#243640}.ticketAttachmentInfo{font-size:12px;color:#6d7f87;margin:0 0 12px}.ticketAttachmentGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.ticketAttachmentCard{border:1px solid #dfe8eb;border-radius:12px;overflow:hidden;background:#f7fafb}.ticketAttachmentCard img{width:100%;height:410px;object-fit:contain;display:block;background:#eef3f5}.ticketAttachmentName{padding:9px 10px;font-size:12px;color:#425761;text-align:center;background:#fff}.ticketAttachmentEmpty{padding:36px;text-align:center;color:#6d7f87;border:1px dashed #ccd9dd;border-radius:12px}@media(max-width:700px){.ticketTable td:nth-child(2):before{content:"المرفقات"!important}.ticketAttachmentGrid{grid-template-columns:1fr}.ticketAttachmentCard img{height:340px}}
 </style>
 
+
 <script id="ticketAttachmentsVerifiedScript">
 (()=>{
   const BMC_ORIGIN="https://usc-is.onbmc.com";
+  const attachmentBase=BMC_ORIGIN+"/api/com.bmc.dsm.attachment-service-lib/rx/application/v1/attachment/file/";
   const pending=new Map();
-  const metadataCache=new Map();
+  const cache=new Map();
   let bridgeWindow=null;
 
   const escHtml=v=>String(v??"")
     .replace(/&/g,"&amp;").replace(/</g,"&lt;")
     .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 
-  const setAttachmentProgress=(text,mode="busy")=>{
-    try{state(text,true)}catch{}
-    const d=document.getElementById("dot");
-    if(!d)return;
-    d.classList.remove("pulseOk","pulseBusy","pulseWarn","pulseError","busy");
-    if(mode==="ok")d.classList.add("pulseOk");
-    else if(mode==="error")d.classList.add("pulseError");
-    else if(mode==="warn")d.classList.add("pulseWarn");
-    else d.classList.add("pulseBusy");
-  };
-
   window.addEventListener("message",e=>{
     if(e.origin!==BMC_ORIGIN)return;
+
     if(e.data?.type==="BMC_ATTACHMENT_BRIDGE_READY"){
       bridgeWindow=e.source;
       return;
     }
-    if((e.data?.type==="BMC_ATTACHMENT_RESPONSE"||e.data?.type==="BMC_ATTACHMENT_BINARY_RESPONSE")&&e.data?.requestId){
+
+    if(e.data?.type==="BMC_ATTACHMENT_RESPONSE"&&e.data?.requestId){
       bridgeWindow=e.source;
       const p=pending.get(e.data.requestId);
       if(!p)return;
       pending.delete(e.data.requestId);
       clearTimeout(p.timer);
-      e.data.ok ? p.resolve(e.data) : p.reject(new Error(e.data.error||"تعذر قراءة المرفقات"));
+      e.data.ok
+        ? p.resolve(Array.isArray(e.data.items)?e.data.items:[])
+        : p.reject(new Error(e.data.error||"تعذر قراءة المرفقات"));
     }
   });
 
@@ -1672,408 +1667,49 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
     return w&&!w.closed?w:null;
   };
 
-  const bridgeRequest=(payload,timeout=20000)=>new Promise((resolve,reject)=>{
+  const requestAttachments=recordId=>{
+    if(cache.has(recordId))return Promise.resolve(cache.get(recordId));
+
     const target=bridgeTarget();
-    if(!target){reject(new Error("BRIDGE_NOT_READY"));return}
+    if(!target)return Promise.reject(new Error("BRIDGE_NOT_READY"));
+
     const requestId="att_"+Date.now()+"_"+Math.random().toString(36).slice(2);
-    const timer=setTimeout(()=>{
-      pending.delete(requestId);
-      reject(new Error("BRIDGE_TIMEOUT"));
-    },timeout);
-    pending.set(requestId,{timer,resolve,reject});
-    try{
-      target.postMessage({...payload,requestId},BMC_ORIGIN);
-    }catch(err){
-      clearTimeout(timer);
-      pending.delete(requestId);
-      reject(err);
-    }
-  });
 
-  async function fetchAttachmentMetadata(recordId){
-    if(metadataCache.has(recordId))return metadataCache.get(recordId);
-    const r=await bridgeRequest({type:"BMC_ATTACHMENT_REQUEST",recordId});
-    const items=Array.isArray(r.items)?r.items:[];
-    metadataCache.set(recordId,items);
-    return items;
-  }
+    return new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>{
+        pending.delete(requestId);
+        reject(new Error("BRIDGE_TIMEOUT"));
+      },15000);
 
-  async function fetchAttachmentBinary(attachment){
-    const r=await bridgeRequest({type:"BMC_ATTACHMENT_BINARY_REQUEST",attachment},45000);
-    return {buffer:r.buffer,mediaType:r.mediaType||attachment.mediaType||"application/octet-stream"};
-  }
+      pending.set(requestId,{
+        timer,
+        resolve:items=>{
+          cache.set(recordId,items);
+          resolve(items);
+        },
+        reject
+      });
 
-  const safeName=v=>String(v||"file")
-    .replace(/[^\w.\-\u0600-\u06FF]+/g,"_")
-    .replace(/^_+|_+$/g,"")
-    .slice(0,90)||"file";
-
-  const apiPath=p=>p.split("/").map(encodeURIComponent).join("/");
-
-  const bytesBase64=buffer=>{
-    const bytes=new Uint8Array(buffer);
-    let binary="",step=0x8000;
-    for(let i=0;i<bytes.length;i+=step){
-      binary+=String.fromCharCode(...bytes.subarray(i,i+step));
-    }
-    return btoa(binary);
+      try{
+        target.postMessage({
+          type:"BMC_ATTACHMENT_REQUEST",
+          requestId,
+          recordId
+        },BMC_ORIGIN);
+      }catch(err){
+        clearTimeout(timer);
+        pending.delete(requestId);
+        reject(err);
+      }
+    });
   };
 
-  const canvasBlob=(canvas,type,quality)=>new Promise((resolve,reject)=>{
-    canvas.toBlob(b=>b?resolve(b):reject(new Error("تعذر ضغط الصورة")),type,quality);
-  });
-
-  async function compressAttachment(binary,attachment){
-    const originalType=String(binary.mediaType||attachment.mediaType||"application/octet-stream").toLowerCase();
-    const originalBuffer=binary.buffer;
-    const originalBytes=originalBuffer?.byteLength||0;
-
-    // Non-images stay unchanged.
-    if(!originalType.startsWith("image/") || originalType==="image/gif" || originalType==="image/svg+xml"){
-      return{
-        buffer:originalBuffer,
-        mediaType:originalType,
-        extension:(String(attachment.name||"").split(".").pop()||"bin").toLowerCase(),
-        originalBytes,
-        finalBytes:originalBytes,
-        compressed:false
-      };
-    }
-
-    // Very small images do not need recompression.
-    if(originalBytes && originalBytes<=180*1024){
-      return{
-        buffer:originalBuffer,
-        mediaType:originalType,
-        extension:(originalType.includes("png")?"png":originalType.includes("webp")?"webp":"jpg"),
-        originalBytes,
-        finalBytes:originalBytes,
-        compressed:false
-      };
-    }
-
-    try{
-      const blob=new Blob([originalBuffer],{type:originalType});
-      const bitmap=await createImageBitmap(blob);
-      const maxSide=1100;
-      const scale=Math.min(1,maxSide/Math.max(bitmap.width,bitmap.height));
-      let w=Math.max(1,Math.round(bitmap.width*scale));
-      let h=Math.max(1,Math.round(bitmap.height*scale));
-
-      const canvas=document.createElement("canvas");
-      canvas.width=w;canvas.height=h;
-      const ctx=canvas.getContext("2d",{alpha:false});
-      ctx.drawImage(bitmap,0,0,w,h);
-      bitmap.close?.();
-
-      const target=180*1024;
-      let quality=.70;
-      let outBlob=await canvasBlob(canvas,"image/webp",quality);
-
-      // Reduce quality first.
-      for(const q of [.62,.54,.46]){
-        if(outBlob.size<=target)break;
-        quality=q;
-        outBlob=await canvasBlob(canvas,"image/webp",quality);
-      }
-
-      // If still too large, reduce dimensions once more.
-      if(outBlob.size>target*1.35 && Math.max(w,h)>850){
-        const ratio=850/Math.max(w,h);
-        const w2=Math.max(1,Math.round(w*ratio));
-        const h2=Math.max(1,Math.round(h*ratio));
-        const c2=document.createElement("canvas");
-        c2.width=w2;c2.height=h2;
-        c2.getContext("2d",{alpha:false}).drawImage(canvas,0,0,w2,h2);
-        outBlob=await canvasBlob(c2,"image/webp",.55);
-      }
-
-      const outBuffer=await outBlob.arrayBuffer();
-      return{
-        buffer:outBuffer,
-        mediaType:"image/webp",
-        extension:"webp",
-        originalBytes,
-        finalBytes:outBuffer.byteLength,
-        compressed:true
-      };
-    }catch(err){
-      console.warn("Image compression fallback:",err);
-      return{
-        buffer:originalBuffer,
-        mediaType:originalType,
-        extension:(originalType.includes("png")?"png":originalType.includes("webp")?"webp":"jpg"),
-        originalBytes,
-        finalBytes:originalBytes,
-        compressed:false
-      };
-    }
-  }
-
-  class GitAttachmentBatchUploader{
-    constructor(token){
-      this.token=token;
-      this.queue=[];
-      this.timer=null;
-      this.chain=Promise.resolve();
-      this.headSha=null;
-      this.treeSha=null;
-      this.totalFiles=0;
-      this.totalBytes=0;
-    }
-
-    headers(){
-      return{
-        "Accept":"application/vnd.github+json",
-        "Authorization":"Bearer "+this.token,
-        "X-GitHub-Api-Version":"2026-03-10",
-        "Content-Type":"application/json"
-      };
-    }
-
-    async init(){
-      if(this.headSha&&this.treeSha)return;
-      const refUrl=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/git/ref/heads/${encodeURIComponent(GH_SHARED.branch)}`;
-      const refRes=await fetch(refUrl,{headers:this.headers()});
-      if(!refRes.ok)throw Error("تعذر قراءة فرع GitHub ("+refRes.status+")");
-      const ref=await refRes.json();
-      this.headSha=ref?.object?.sha;
-      if(!this.headSha)throw Error("تعذر تحديد آخر Commit");
-
-      const commitUrl=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/git/commits/${this.headSha}`;
-      const commitRes=await fetch(commitUrl,{headers:this.headers()});
-      if(!commitRes.ok)throw Error("تعذر قراءة Commit الحالي ("+commitRes.status+")");
-      const commit=await commitRes.json();
-      this.treeSha=commit?.tree?.sha;
-      if(!this.treeSha)throw Error("تعذر تحديد Git Tree");
-    }
-
-    async createBlob(buffer){
-      const url=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/git/blobs`;
-      const res=await fetch(url,{
-        method:"POST",
-        headers:this.headers(),
-        body:JSON.stringify({content:bytesBase64(buffer),encoding:"base64"})
-      });
-      if(!res.ok){
-        let msg="";
-        try{msg=(await res.json())?.message||""}catch{}
-        throw Error((msg||"تعذر إنشاء ملف المرفق")+" ("+res.status+")");
-      }
-      return (await res.json()).sha;
-    }
-
-    enqueue(path,buffer){
-      return new Promise((resolve,reject)=>{
-        this.queue.push({path,buffer,resolve,reject});
-        if(this.queue.length>=18)this.flush();
-        else if(!this.timer)this.timer=setTimeout(()=>this.flush(),450);
-      });
-    }
-
-    flush(){
-      if(this.timer){clearTimeout(this.timer);this.timer=null}
-      if(!this.queue.length)return this.chain;
-
-      const batch=this.queue.splice(0,18);
-      this.chain=this.chain.then(()=>this.commitBatch(batch)).catch(err=>{
-        batch.forEach(x=>x.reject(err));
-        throw err;
-      });
-      return this.chain;
-    }
-
-    async commitBatch(batch){
-      await this.init();
-
-      // Blob creation is the only per-file GitHub request; do 8 concurrently.
-      const blobShas=new Array(batch.length);
-      let cursor=0;
-      const blobWorker=async()=>{
-        while(cursor<batch.length){
-          const i=cursor++;
-          blobShas[i]=await this.createBlob(batch[i].buffer);
-        }
-      };
-      await Promise.all(Array.from({length:Math.min(8,batch.length)},blobWorker));
-
-      const treeUrl=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/git/trees`;
-      const treeRes=await fetch(treeUrl,{
-        method:"POST",
-        headers:this.headers(),
-        body:JSON.stringify({
-          base_tree:this.treeSha,
-          tree:batch.map((x,i)=>({
-            path:x.path,
-            mode:"100644",
-            type:"blob",
-            sha:blobShas[i]
-          }))
-        })
-      });
-      if(!treeRes.ok)throw Error("تعذر إنشاء دفعة المرفقات ("+treeRes.status+")");
-      const newTree=(await treeRes.json()).sha;
-
-      const commitUrl=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/git/commits`;
-      const commitRes=await fetch(commitUrl,{
-        method:"POST",
-        headers:this.headers(),
-        body:JSON.stringify({
-          message:`Update ${batch.length} ticket attachments ${new Date().toISOString()}`,
-          tree:newTree,
-          parents:[this.headSha]
-        })
-      });
-      if(!commitRes.ok)throw Error("تعذر إنشاء Commit للمرفقات ("+commitRes.status+")");
-      const newCommit=(await commitRes.json()).sha;
-
-      const refUrl=`https://api.github.com/repos/${GH_SHARED.owner}/${GH_SHARED.repo}/git/refs/heads/${encodeURIComponent(GH_SHARED.branch)}`;
-      const refRes=await fetch(refUrl,{
-        method:"PATCH",
-        headers:this.headers(),
-        body:JSON.stringify({sha:newCommit,force:false})
-      });
-      if(!refRes.ok)throw Error("تعذر نشر دفعة المرفقات ("+refRes.status+")");
-
-      this.headSha=newCommit;
-      this.treeSha=newTree;
-      for(const x of batch){
-        this.totalFiles++;
-        this.totalBytes+=x.buffer.byteLength||0;
-        x.resolve(true);
-      }
-    }
-
-    async finish(){
-      this.flush();
-      await this.chain;
-      return{files:this.totalFiles,bytes:this.totalBytes};
-    }
-  }
-
-  async function syncOneRecordAttachments(record,token,uploader,stats){
-    if(!record?.recordId)return null;
-
-    const items=await fetchAttachmentMetadata(record.recordId);
-    const old=Array.isArray(record.sharedAttachments)?record.sharedAttachments:[];
-    const oldById=new Map(old.map(x=>[String(x.id||""),x]));
-    const shared=[];
-
-    for(const a of items){
-      const id=String(a.id||a.instanceId||"");
-      if(!id)continue;
-
-      const prev=oldById.get(id);
-      if(prev?.path){
-        shared.push(prev);
-        stats.skipped++;
-        continue;
-      }
-
-      const originalName=a.name||"مرفق";
-      const binary=await fetchAttachmentBinary(a);
-      const packed=await compressAttachment(binary,a);
-
-      stats.originalBytes+=packed.originalBytes||0;
-      stats.finalBytes+=packed.finalBytes||0;
-      if(packed.compressed)stats.compressed++;
-
-      const stem=safeName(originalName.replace(/\.[^.]+$/,""));
-      const path=`attachments/${String(record.caseId||"unknown")}/${id}_${stem}.${packed.extension}`;
-
-      await uploader.enqueue(path,packed.buffer);
-
-      shared.push({
-        id,
-        name:originalName,
-        mediaType:packed.mediaType||a.mediaType||"",
-        path,
-        url:"./"+path,
-        originalBytes:packed.originalBytes||0,
-        storedBytes:packed.finalBytes||0
-      });
-      stats.uploaded++;
-    }
-    return shared;
-  }
-
-  async function persistAttachmentMetadata(){
-    const saved={
-      schemaVersion:14,
-      updatedAt:db.updatedAt,
-      records:rawSnapshotRecords(db.records)
-    };
-    await putLocal(saved);
-  }
-
-  async function syncChangedAttachments(records){
-    if(!records.length)return {synced:0,failed:0,uploaded:0,compressed:0,skipped:0,savedPct:0};
-
-    const token=localStorage.getItem(GH_SHARED.tokenKey)||"";
-    if(!token)throw Error("GITHUB_TOKEN_MISSING");
-    if(!bridgeTarget())throw Error("BRIDGE_NOT_READY");
-
-    const uploader=new GitAttachmentBatchUploader(token);
-    const stats={
-      synced:0,failed:0,uploaded:0,compressed:0,skipped:0,
-      originalBytes:0,finalBytes:0
-    };
-
-    const queue=[...records];
-    const total=queue.length;
-    let processed=0;
-
-    const worker=async()=>{
-      while(queue.length){
-        const record=queue.shift();
-        if(!record)break;
-
-        const current=++processed;
-        setAttachmentProgress(
-          `جاري مزامنة المرفقات • ${current} من ${total} • تم رفع ${stats.uploaded} ملف…`,
-          "busy"
-        );
-
-        try{
-          const list=await syncOneRecordAttachments(record,token,uploader,stats);
-          if(list!==null){
-            record.sharedAttachments=list;
-            stats.synced++;
-          }
-        }catch(err){
-          console.error("Attachment sync failed for",record?.caseId,err);
-          stats.failed++;
-        }
-      }
-    };
-
-    // Six records in parallel: much faster without overwhelming BMC/browser.
-    await Promise.all(Array.from({length:Math.min(6,total)},worker));
-
-    setAttachmentProgress(
-      `جاري إنهاء رفع المرفقات • ${stats.uploaded} ملف…`,
-      "busy"
-    );
-    await uploader.finish();
-
-    await persistAttachmentMetadata();
-
-    setAttachmentProgress("تم رفع المرفقات • جاري نشر الفهرس للجميع…","warn");
-    await publishSharedSnapshot(token);
-
-    const savedPct=stats.originalBytes
-      ?Math.max(0,Math.round((1-stats.finalBytes/stats.originalBytes)*100))
-      :0;
-
-    return{
-      synced:stats.synced,
-      failed:stats.failed,
-      uploaded:stats.uploaded,
-      compressed:stats.compressed,
-      skipped:stats.skipped,
-      savedPct
-    };
-  }
+  const attachmentUrl=a=>{
+    const id=a.id||a.instanceId||"";
+    const rd=a.relatedRD||"com.bmc.dsm.ticketing-lib:DynamicData";
+    const ri=a.relatedRI||"";
+    return `${attachmentBase}${encodeURIComponent(id)}?sourceRecordDef=${encodeURIComponent(rd)}&sourceRecordId=${encodeURIComponent(ri)}&operation=preview`;
+  };
 
   const close=()=>document.querySelector(".ticketAttachmentOverlay")?.remove();
 
@@ -2085,22 +1721,23 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
     const body=items.length
       ? `<div class="ticketAttachmentGrid">${items.map(a=>{
           const name=escHtml(a.name||"مرفق");
-          const url=escHtml(a.url||a.path||"");
-          const img=String(a.mediaType||"").toLowerCase().startsWith("image/");
+          const url=escHtml(attachmentUrl(a));
+          const isImage=String(a.mediaType||"").toLowerCase().startsWith("image/");
+
           return `<div class="ticketAttachmentCard">${
-            img
-              ? `<img src="${url}" alt="${name}" loading="lazy">`
+            isImage
+              ? `<img src="${url}" alt="${name}" loading="lazy" referrerpolicy="strict-origin-when-cross-origin">`
               : `<div style="padding:32px;text-align:center"><a href="${url}" target="_blank" rel="noopener noreferrer">فتح ${name}</a></div>`
           }<div class="ticketAttachmentName">${name}</div></div>`;
         }).join("")}</div>`
-      : `<div class="ticketAttachmentEmpty">لا توجد مرفقات مسجلة على هذا البلاغ.</div>`;
+      : `<div class="ticketAttachmentEmpty">لا توجد مرفقات على هذا البلاغ.</div>`;
 
     ov.innerHTML=`<div class="ticketAttachmentModal">
       <div class="ticketAttachmentHead">
         <h3>مرفقات البلاغ — ${escHtml(caseId)}</h3>
-        <button class="ticketAttachmentClose" type="button">×</button>
+        <button class="ticketAttachmentClose" type="button" aria-label="إغلاق">×</button>
       </div>
-      <p class="ticketAttachmentInfo">المرفقات المعروضة هي النسخة المنشورة مع آخر تحديث للداش بورد.</p>
+      <p class="ticketAttachmentInfo">يتم جلب مرفقات هذا البلاغ فقط وقت الضغط على «عرض»، ولا يتم رفع أي مرفقات إلى GitHub.</p>
       ${body}
     </div>`;
 
@@ -2116,109 +1753,33 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
     e.preventDefault();
     e.stopPropagation();
 
+    const recordId=btn.dataset.recordId||"";
     const caseId=btn.dataset.caseId||"";
-    const record=db.records.find(r=>String(r.caseId||"")===String(caseId));
-    if(!record)return;
+    if(!recordId)return;
 
-    if(Array.isArray(record.sharedAttachments)){
-      show(caseId,record.sharedAttachments);
-      return;
-    }
+    const old=btn.textContent;
+    btn.classList.add("loading");
+    btn.textContent="جاري…";
 
-    if(document.body.classList.contains("admin-mode")&&bridgeTarget()){
-      const token=localStorage.getItem(GH_SHARED.tokenKey)||"";
-      if(!token){
-        alert("يلزم GitHub Token لنشر المرفقات.");
-        return;
+    try{
+      const items=await requestAttachments(recordId);
+      show(caseId,items);
+    }catch(err){
+      console.error("BMC attachment viewer:",err);
+
+      if(err.message==="BRIDGE_NOT_READY"||err.message==="BRIDGE_TIMEOUT"){
+        alert("لعرض المرفقات: افتح منصة BMC وسجّل الدخول، ثم شغّل أداة المفضلة الخاصة بجلب التحديث مرة واحدة في نافذة BMC. بعد ذلك اضغط «عرض» مرة أخرى. لا يلزم دخول صلاحية الأدمن في الداش بورد.");
+      }else{
+        alert("تعذر قراءة مرفقات البلاغ من BMC: "+err.message);
       }
-
-      const old=btn.textContent;
-      btn.classList.add("loading");
-      btn.textContent="جاري…";
-
-      try{
-        const uploader=new GitAttachmentBatchUploader(token);
-        const stats={uploaded:0,compressed:0,skipped:0,originalBytes:0,finalBytes:0};
-        record.sharedAttachments=await syncOneRecordAttachments(record,token,uploader,stats)||[];
-        await uploader.finish();
-        await persistAttachmentMetadata();
-        await publishSharedSnapshot(token);
-        show(caseId,record.sharedAttachments);
-      }catch(err){
-        console.error(err);
-        alert("تعذر مزامنة مرفقات هذا البلاغ: "+err.message);
-      }finally{
-        btn.classList.remove("loading");
-        btn.textContent=old;
-      }
-      return;
+    }finally{
+      btn.classList.remove("loading");
+      btn.textContent=old;
     }
-
-    alert("مرفقات هذا البلاغ لم تُنشر بعد. سيتم نشرها تلقائيًا عند تحديث البلاغ من حساب الأدمن.");
   },true);
-
-  const importWithSharedAttachments=importJsonPacket;
-  importJsonPacket=async p=>{
-    const before=new Map(
-      (db.records||[]).map(r=>[
-        String(r.caseId||""),
-        {
-          modified:String(r.modifiedDate||""),
-          sharedAttachments:Array.isArray(r.sharedAttachments)?r.sharedAttachments:null
-        }
-      ])
-    );
-
-    const rawRows=Array.isArray(p?.rows)?p.rows:[];
-    const changedIds=new Set();
-
-    rawRows.forEach(x=>{
-      const caseId=String(x?.["1"]??"").trim();
-      if(!caseId)return;
-      const modified=String(x?.["6"]??"");
-      if(!before.has(caseId)||before.get(caseId).modified!==modified)changedIds.add(caseId);
-    });
-
-    const result=await importWithSharedAttachments(p);
-
-    // Keep previously published attachment links; only fetch truly new attachment IDs.
-    for(const r of (db.records||[])){
-      const prev=before.get(String(r.caseId||""));
-      if(prev?.sharedAttachments && !Array.isArray(r.sharedAttachments)){
-        r.sharedAttachments=prev.sharedAttachments;
-      }
-    }
-
-    const changed=(db.records||[]).filter(r=>
-      changedIds.has(String(r.caseId||"")) && r.recordId
-    );
-
-    if(changed.length){
-      try{
-        setAttachmentProgress(`تم تحديث البلاغات • جاري مزامنة مرفقات ${changed.length} بلاغ…`,"busy");
-        const x=await syncChangedAttachments(changed);
-        setAttachmentProgress(
-          x.failed
-            ? `تم نشر المرفقات • ${x.uploaded} ملف • توفير ${x.savedPct}% • تعذر ${x.failed} بلاغ`
-            : `تم نشر المرفقات للجميع • ${x.uploaded} ملف • توفير ${x.savedPct}% من الحجم`,
-          x.failed?"warn":"ok"
-        );
-      }catch(err){
-        console.error("Automatic shared attachment sync:",err);
-        if(err.message==="BRIDGE_NOT_READY"){
-          setAttachmentProgress("تم نشر بيانات البلاغات • تعذر مزامنة المرفقات لأن نافذة BMC غير متصلة","warn");
-        }else if(err.message==="GITHUB_TOKEN_MISSING"){
-          setAttachmentProgress("تم نشر بيانات البلاغات • يلزم GitHub Token لمزامنة المرفقات","warn");
-        }else{
-          setAttachmentProgress("تم نشر بيانات البلاغات • تعذر مزامنة بعض المرفقات","warn");
-        }
-      }
-    }
-
-    return result;
-  };
 })();
 </script>
+
 
 
 </body></html>
