@@ -1630,79 +1630,127 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
 </style>
 
 
+
 <script id="ticketAttachmentsVerifiedScript">
 (()=>{
   const BMC_ORIGIN="https://usc-is.onbmc.com";
   const attachmentBase=BMC_ORIGIN+"/api/com.bmc.dsm.attachment-service-lib/rx/application/v1/attachment/file/";
   const pending=new Map();
   const cache=new Map();
-  let bridgeWindow=null;
+  let bookmarkBridgeWindow=null;
+  let extensionReady=false;
 
   const escHtml=v=>String(v??"")
     .replace(/&/g,"&amp;").replace(/</g,"&lt;")
     .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 
+  // Existing bookmarklet bridge remains as a fallback.
   window.addEventListener("message",e=>{
-    if(e.origin!==BMC_ORIGIN)return;
-
-    if(e.data?.type==="BMC_ATTACHMENT_BRIDGE_READY"){
-      bridgeWindow=e.source;
+    if(e.origin===BMC_ORIGIN){
+      if(e.data?.type==="BMC_ATTACHMENT_BRIDGE_READY"){
+        bookmarkBridgeWindow=e.source;
+        return;
+      }
+      if(e.data?.type==="BMC_ATTACHMENT_RESPONSE"&&e.data?.requestId){
+        bookmarkBridgeWindow=e.source;
+        const p=pending.get(e.data.requestId);
+        if(!p)return;
+        pending.delete(e.data.requestId);
+        clearTimeout(p.timer);
+        e.data.ok
+          ? p.resolve(Array.isArray(e.data.items)?e.data.items:[])
+          : p.reject(new Error(e.data.error||"تعذر قراءة المرفقات"));
+      }
       return;
     }
 
-    if(e.data?.type==="BMC_ATTACHMENT_RESPONSE"&&e.data?.requestId){
-      bridgeWindow=e.source;
-      const p=pending.get(e.data.requestId);
-      if(!p)return;
-      pending.delete(e.data.requestId);
-      clearTimeout(p.timer);
-      e.data.ok
-        ? p.resolve(Array.isArray(e.data.items)?e.data.items:[])
-        : p.reject(new Error(e.data.error||"تعذر قراءة المرفقات"));
+    // Chrome/Edge extension bridge response. It is posted into the same dashboard window.
+    if(e.source===window && e.data?.source==="BMC_ATTACHMENT_EXTENSION"){
+      if(e.data.type==="BMC_EXTENSION_READY"){
+        extensionReady=true;
+        return;
+      }
+      if(e.data.type==="BMC_EXTENSION_ATTACHMENT_RESPONSE"&&e.data.requestId){
+        extensionReady=true;
+        const p=pending.get(e.data.requestId);
+        if(!p)return;
+        pending.delete(e.data.requestId);
+        clearTimeout(p.timer);
+        e.data.ok
+          ? p.resolve(Array.isArray(e.data.items)?e.data.items:[])
+          : p.reject(new Error(e.data.error||"تعذر قراءة المرفقات"));
+      }
     }
   });
 
-  const bridgeTarget=()=>{
-    const w=bridgeWindow||window.__bmcSupportWindow;
+  // Ask the installed extension to announce itself.
+  window.postMessage({
+    source:"BMC_DASHBOARD_PAGE",
+    type:"BMC_EXTENSION_PING"
+  },"*");
+
+  const requestViaExtension=(recordId,timeout=12000)=>new Promise((resolve,reject)=>{
+    const requestId="extatt_"+Date.now()+"_"+Math.random().toString(36).slice(2);
+    const timer=setTimeout(()=>{
+      pending.delete(requestId);
+      reject(new Error("EXTENSION_TIMEOUT"));
+    },timeout);
+
+    pending.set(requestId,{timer,resolve,reject});
+
+    window.postMessage({
+      source:"BMC_DASHBOARD_PAGE",
+      type:"BMC_EXTENSION_ATTACHMENT_REQUEST",
+      requestId,
+      recordId
+    },"*");
+  });
+
+  const bookmarkBridgeTarget=()=>{
+    const w=bookmarkBridgeWindow||window.__bmcSupportWindow;
     return w&&!w.closed?w:null;
   };
 
-  const requestAttachments=recordId=>{
-    if(cache.has(recordId))return Promise.resolve(cache.get(recordId));
+  const requestViaBookmarklet=(recordId,timeout=12000)=>new Promise((resolve,reject)=>{
+    const target=bookmarkBridgeTarget();
+    if(!target){reject(new Error("BOOKMARK_BRIDGE_NOT_READY"));return}
 
-    const target=bridgeTarget();
-    if(!target)return Promise.reject(new Error("BRIDGE_NOT_READY"));
+    const requestId="bmatt_"+Date.now()+"_"+Math.random().toString(36).slice(2);
+    const timer=setTimeout(()=>{
+      pending.delete(requestId);
+      reject(new Error("BOOKMARK_BRIDGE_TIMEOUT"));
+    },timeout);
 
-    const requestId="att_"+Date.now()+"_"+Math.random().toString(36).slice(2);
+    pending.set(requestId,{timer,resolve,reject});
 
-    return new Promise((resolve,reject)=>{
-      const timer=setTimeout(()=>{
-        pending.delete(requestId);
-        reject(new Error("BRIDGE_TIMEOUT"));
-      },15000);
+    target.postMessage({
+      type:"BMC_ATTACHMENT_REQUEST",
+      requestId,
+      recordId
+    },BMC_ORIGIN);
+  });
 
-      pending.set(requestId,{
-        timer,
-        resolve:items=>{
-          cache.set(recordId,items);
-          resolve(items);
-        },
-        reject
-      });
+  async function requestAttachments(recordId){
+    if(cache.has(recordId))return cache.get(recordId);
 
+    // Preferred path: extension automatically finds any open, logged-in BMC tab.
+    try{
+      const items=await requestViaExtension(recordId);
+      cache.set(recordId,items);
+      return items;
+    }catch(extErr){
+      console.warn("BMC extension bridge unavailable:",extErr);
+
+      // Fallback: preserve the already-working bookmarklet bridge.
       try{
-        target.postMessage({
-          type:"BMC_ATTACHMENT_REQUEST",
-          requestId,
-          recordId
-        },BMC_ORIGIN);
-      }catch(err){
-        clearTimeout(timer);
-        pending.delete(requestId);
-        reject(err);
+        const items=await requestViaBookmarklet(recordId);
+        cache.set(recordId,items);
+        return items;
+      }catch(bmErr){
+        throw new Error("NO_BMC_BRIDGE");
       }
-    });
-  };
+    }
+  }
 
   const attachmentUrl=a=>{
     const id=a.id||a.instanceId||"";
@@ -1737,7 +1785,7 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
         <h3>مرفقات البلاغ — ${escHtml(caseId)}</h3>
         <button class="ticketAttachmentClose" type="button" aria-label="إغلاق">×</button>
       </div>
-      <p class="ticketAttachmentInfo">يتم جلب مرفقات هذا البلاغ فقط وقت الضغط على «عرض»، ولا يتم رفع أي مرفقات إلى GitHub.</p>
+      <p class="ticketAttachmentInfo">يتم جلب مرفقات هذا البلاغ فقط عند الضغط على «عرض» من جلسة BMC المفتوحة في المتصفح، ولا يتم رفع أي مرفقات إلى GitHub.</p>
       ${body}
     </div>`;
 
@@ -1766,12 +1814,7 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
       show(caseId,items);
     }catch(err){
       console.error("BMC attachment viewer:",err);
-
-      if(err.message==="BRIDGE_NOT_READY"||err.message==="BRIDGE_TIMEOUT"){
-        alert("لعرض المرفقات: افتح منصة BMC وسجّل الدخول، ثم شغّل أداة المفضلة الخاصة بجلب التحديث مرة واحدة في نافذة BMC. بعد ذلك اضغط «عرض» مرة أخرى. لا يلزم دخول صلاحية الأدمن في الداش بورد.");
-      }else{
-        alert("تعذر قراءة مرفقات البلاغ من BMC: "+err.message);
-      }
+      alert("تعذر الاتصال بجلسة BMC. تأكد أن إضافة BMC Attachment Bridge مثبتة ومفعلة، وأن منصة BMC مفتوحة ومسجل الدخول إليها في أي تبويب على نفس المتصفح.");
     }finally{
       btn.classList.remove("loading");
       btn.textContent=old;
@@ -1779,6 +1822,7 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
   },true);
 })();
 </script>
+
 
 
 
