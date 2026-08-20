@@ -234,7 +234,7 @@ function enhancedApply(){ticketLimit=250;F=filterRows();buildMulti();enhancedRen
 apply=enhancedApply;
 function mini(id,a){const count=x=>a.filter(r=>r.slmStatus===x).length;$(id).innerHTML=`<span>ضمن المهلة: <b>${n(count("Within Time Limit"))}</b></span><span>تحذير: <b>${n(count("Warning"))}</b></span><span>مخترق: <b>${n(count("Breached"))}</b></span>`}
 function miniClosed(a){mini("slaClosed",a)}
-function enhancedRender(){oldRender();const closed=F.filter(r=>!isOpen(r)),closedPct=closed.length?Math.round(closed.filter(slaOk).length/closed.length*100):0;$("pc").textContent=closedPct+"%";$("dc").style.setProperty("--p",closedPct);mini("slaTotal",F);mini("slaOpen",F.filter(isOpen));miniClosed(closed);bars("bsub2",group(F,"category4"));typeChart();splitTrend();renderContractorPerformance();renderTickets()}
+function enhancedRender(){oldRender();const closed=F.filter(r=>!isOpen(r)),closedPct=closed.length?Math.round(closed.filter(slaOk).length/closed.length*100):0;$("pc").textContent=closedPct+"%";$("dc").style.setProperty("--p",closedPct);mini("slaTotal",F);mini("slaOpen",F.filter(isOpen));miniClosed(closed);bars("bsub2",group(F,"category4"));typeChart();splitTrend();renderContractorPerformance();window.renderTickets?.()}
 function typeChart(){let buildings=[...new Map(F.map(r=>[r.ministryNumber,r])).values()],g=group(buildings,"gender"),mx=Math.max(1,...g.map(x=>x[1]));$("types").innerHTML=g.map(([k,v],i)=>`<div class="type"><div class="col" style="height:${Math.max(5,v/mx*120)}px;background:${["linear-gradient(#20b6a8,#087c75)","linear-gradient(#4f8fe8,#2764b5)","linear-gradient(#f0a44d,#d77722)"][i%3]}"><b>${n(v)}</b></div><label>${esc(k)}</label></div>`).join("")}
 function renderContractorPerformance(){
  const ticketsSvg=$("contractorTicketsChart"),slaSvg=$("contractorSlaChart");
@@ -1633,166 +1633,121 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
 
 <script id="ticketAttachmentsVerifiedScript">
 (()=>{
-  const BMC_ORIGIN="https://usc-is.onbmc.com";
-  const attachmentBase=BMC_ORIGIN+"/api/com.bmc.dsm.attachment-service-lib/rx/application/v1/attachment/file/";
   const pending=new Map();
-  const cache=new Map();
-  let bookmarkBridgeWindow=null;
-  let extensionReady=false;
+  const attachmentCache=new Map();
+  const fileCache=new Map();
 
   const escHtml=v=>String(v??"")
     .replace(/&/g,"&amp;").replace(/</g,"&lt;")
     .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 
-  // Existing bookmarklet bridge remains as a fallback.
-  window.addEventListener("message",e=>{
-    if(e.origin===BMC_ORIGIN){
-      if(e.data?.type==="BMC_ATTACHMENT_BRIDGE_READY"){
-        bookmarkBridgeWindow=e.source;
-        return;
-      }
-      if(e.data?.type==="BMC_ATTACHMENT_RESPONSE"&&e.data?.requestId){
-        bookmarkBridgeWindow=e.source;
-        const p=pending.get(e.data.requestId);
-        if(!p)return;
-        pending.delete(e.data.requestId);
-        clearTimeout(p.timer);
-        e.data.ok
-          ? p.resolve(Array.isArray(e.data.items)?e.data.items:[])
-          : p.reject(new Error(e.data.error||"تعذر قراءة المرفقات"));
-      }
-      return;
-    }
-
-    // Chrome/Edge extension bridge response. It is posted into the same dashboard window.
-    if(e.source===window && e.data?.source==="BMC_ATTACHMENT_EXTENSION"){
-      if(e.data.type==="BMC_EXTENSION_READY"){
-        extensionReady=true;
-        return;
-      }
-      if(e.data.type==="BMC_EXTENSION_ATTACHMENT_RESPONSE"&&e.data.requestId){
-        extensionReady=true;
-        const p=pending.get(e.data.requestId);
-        if(!p)return;
-        pending.delete(e.data.requestId);
-        clearTimeout(p.timer);
-        e.data.ok
-          ? p.resolve(Array.isArray(e.data.items)?e.data.items:[])
-          : p.reject(new Error(e.data.error||"تعذر قراءة المرفقات"));
-      }
-    }
-  });
-
-  // Ask the installed extension to announce itself.
-  window.postMessage({
-    source:"BMC_DASHBOARD_PAGE",
-    type:"BMC_EXTENSION_PING"
-  },"*");
-
-  const requestViaExtension=(recordId,timeout=12000)=>new Promise((resolve,reject)=>{
-    const requestId="extatt_"+Date.now()+"_"+Math.random().toString(36).slice(2);
+  const extRequest=(action,payload={},timeout=25000)=>new Promise((resolve,reject)=>{
+    const requestId="bmc_ext_"+Date.now()+"_"+Math.random().toString(36).slice(2);
     const timer=setTimeout(()=>{
       pending.delete(requestId);
       reject(new Error("EXTENSION_TIMEOUT"));
     },timeout);
-
-    pending.set(requestId,{timer,resolve,reject});
-
+    pending.set(requestId,{resolve,reject,timer});
     window.postMessage({
       source:"BMC_DASHBOARD_PAGE",
-      type:"BMC_EXTENSION_ATTACHMENT_REQUEST",
+      type:"BMC_EXTENSION_REQUEST",
       requestId,
-      recordId
+      action,
+      payload
     },"*");
   });
 
-  const bookmarkBridgeTarget=()=>{
-    const w=bookmarkBridgeWindow||window.__bmcSupportWindow;
-    return w&&!w.closed?w:null;
-  };
-
-  const requestViaBookmarklet=(recordId,timeout=12000)=>new Promise((resolve,reject)=>{
-    const target=bookmarkBridgeTarget();
-    if(!target){reject(new Error("BOOKMARK_BRIDGE_NOT_READY"));return}
-
-    const requestId="bmatt_"+Date.now()+"_"+Math.random().toString(36).slice(2);
-    const timer=setTimeout(()=>{
-      pending.delete(requestId);
-      reject(new Error("BOOKMARK_BRIDGE_TIMEOUT"));
-    },timeout);
-
-    pending.set(requestId,{timer,resolve,reject});
-
-    target.postMessage({
-      type:"BMC_ATTACHMENT_REQUEST",
-      requestId,
-      recordId
-    },BMC_ORIGIN);
+  window.addEventListener("message",e=>{
+    if(e.source!==window)return;
+    const d=e.data;
+    if(d?.source!=="BMC_DASHBOARD_EXTENSION" || d?.type!=="BMC_EXTENSION_RESPONSE" || !d?.requestId)return;
+    const p=pending.get(d.requestId);
+    if(!p)return;
+    pending.delete(d.requestId);
+    clearTimeout(p.timer);
+    d.ok ? p.resolve(d.data) : p.reject(new Error(d.error||"EXTENSION_ERROR"));
   });
 
-  async function requestAttachments(recordId){
-    if(cache.has(recordId))return cache.get(recordId);
-
-    // Preferred path: extension automatically finds any open, logged-in BMC tab.
+  async function extensionStatus(){
     try{
-      const items=await requestViaExtension(recordId);
-      cache.set(recordId,items);
-      return items;
-    }catch(extErr){
-      console.warn("BMC extension bridge unavailable:",extErr);
-
-      // Fallback: preserve the already-working bookmarklet bridge.
-      try{
-        const items=await requestViaBookmarklet(recordId);
-        cache.set(recordId,items);
-        return items;
-      }catch(bmErr){
-        throw new Error("NO_BMC_BRIDGE");
-      }
+      return await extRequest("status",{},3000);
+    }catch{
+      return {extension:false,bmcOpen:false};
     }
   }
 
-  const attachmentUrl=a=>{
-    const id=a.id||a.instanceId||"";
-    const rd=a.relatedRD||"com.bmc.dsm.ticketing-lib:DynamicData";
-    const ri=a.relatedRI||"";
-    return `${attachmentBase}${encodeURIComponent(id)}?sourceRecordDef=${encodeURIComponent(rd)}&sourceRecordId=${encodeURIComponent(ri)}&operation=preview`;
-  };
+  async function getAttachments(recordId){
+    if(attachmentCache.has(recordId))return attachmentCache.get(recordId);
+    const data=await extRequest("getAttachments",{recordId},25000);
+    const items=Array.isArray(data?.items)?data.items:[];
+    attachmentCache.set(recordId,items);
+    return items;
+  }
+
+  async function getAttachmentData(a){
+    const id=String(a.id||a.instanceId||"");
+    if(fileCache.has(id))return fileCache.get(id);
+    const data=await extRequest("getAttachmentData",{attachment:a},60000);
+    if(data?.dataUrl)fileCache.set(id,data.dataUrl);
+    return data?.dataUrl||"";
+  }
 
   const close=()=>document.querySelector(".ticketAttachmentOverlay")?.remove();
 
-  const show=(caseId,items)=>{
+  async function show(caseId,items){
     close();
     const ov=document.createElement("div");
     ov.className="ticketAttachmentOverlay";
-
-    const body=items.length
-      ? `<div class="ticketAttachmentGrid">${items.map(a=>{
-          const name=escHtml(a.name||"مرفق");
-          const url=escHtml(attachmentUrl(a));
-          const isImage=String(a.mediaType||"").toLowerCase().startsWith("image/");
-
-          return `<div class="ticketAttachmentCard">${
-            isImage
-              ? `<img src="${url}" alt="${name}" loading="lazy" referrerpolicy="strict-origin-when-cross-origin">`
-              : `<div style="padding:32px;text-align:center"><a href="${url}" target="_blank" rel="noopener noreferrer">فتح ${name}</a></div>`
-          }<div class="ticketAttachmentName">${name}</div></div>`;
-        }).join("")}</div>`
-      : `<div class="ticketAttachmentEmpty">لا توجد مرفقات على هذا البلاغ.</div>`;
 
     ov.innerHTML=`<div class="ticketAttachmentModal">
       <div class="ticketAttachmentHead">
         <h3>مرفقات البلاغ — ${escHtml(caseId)}</h3>
         <button class="ticketAttachmentClose" type="button" aria-label="إغلاق">×</button>
       </div>
-      <p class="ticketAttachmentInfo">يتم جلب مرفقات هذا البلاغ فقط عند الضغط على «عرض» من جلسة BMC المفتوحة في المتصفح، ولا يتم رفع أي مرفقات إلى GitHub.</p>
-      ${body}
+      <p class="ticketAttachmentInfo">يتم جلب مرفقات هذا البلاغ فقط من جلسة BMC المفتوحة في المتصفح. لا يتم رفع أي مرفقات إلى GitHub.</p>
+      <div class="ticketAttachmentGrid"></div>
     </div>`;
 
     document.body.appendChild(ov);
     ov.querySelector(".ticketAttachmentClose").onclick=close;
     ov.addEventListener("click",e=>{if(e.target===ov)close()});
-  };
+
+    const grid=ov.querySelector(".ticketAttachmentGrid");
+
+    if(!items.length){
+      grid.innerHTML='<div class="ticketAttachmentEmpty">لا توجد مرفقات على هذا البلاغ.</div>';
+      return;
+    }
+
+    // Create placeholders immediately, then load files in parallel.
+    const cards=items.map((a,i)=>{
+      const card=document.createElement("div");
+      card.className="ticketAttachmentCard";
+      const name=escHtml(a.name||"مرفق");
+      const isImage=String(a.mediaType||"").toLowerCase().startsWith("image/");
+      card.innerHTML=isImage
+        ? `<div style="height:410px;display:grid;place-items:center;background:#eef3f5;color:#74868e">جاري تحميل الصورة…</div><div class="ticketAttachmentName">${name}</div>`
+        : `<div style="min-height:160px;display:grid;place-items:center;background:#f7fafb;color:#74868e">جاري تحميل المرفق…</div><div class="ticketAttachmentName">${name}</div>`;
+      grid.appendChild(card);
+      return {card,a,isImage,name};
+    });
+
+    await Promise.all(cards.map(async x=>{
+      try{
+        const dataUrl=await getAttachmentData(x.a);
+        if(!dataUrl)throw Error("EMPTY_ATTACHMENT");
+
+        if(x.isImage){
+          x.card.firstElementChild.outerHTML=`<img src="${dataUrl}" alt="${x.name}" loading="lazy">`;
+        }else{
+          x.card.firstElementChild.outerHTML=`<div style="min-height:160px;display:grid;place-items:center;padding:20px;text-align:center"><a href="${dataUrl}" download="${x.name}" style="color:#078d87;font-weight:800;text-decoration:none">فتح / تنزيل ${x.name}</a></div>`;
+        }
+      }catch(err){
+        console.error("Attachment file load:",err);
+        x.card.firstElementChild.textContent="تعذر تحميل هذا المرفق";
+      }
+    }));
+  }
 
   document.addEventListener("click",async e=>{
     const btn=e.target?.closest?.(".attachmentViewBtn");
@@ -1810,11 +1765,32 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
     btn.textContent="جاري…";
 
     try{
-      const items=await requestAttachments(recordId);
-      show(caseId,items);
+      const status=await extensionStatus();
+
+      if(!status?.extension){
+        alert("إضافة BMC Attachments غير مثبتة على هذا المتصفح. ثبّت الإضافة مرة واحدة ثم أعد تحميل الصفحة.");
+        return;
+      }
+
+      if(!status?.bmcOpen){
+        alert("منصة BMC غير مفتوحة. افتح منصة BMC في أي تبويب وسجّل الدخول، ثم اضغط «عرض» مرة أخرى.");
+        return;
+      }
+
+      const items=await getAttachments(recordId);
+      await show(caseId,items);
     }catch(err){
-      console.error("BMC attachment viewer:",err);
-      alert("تعذر الاتصال بجلسة BMC. تأكد أن إضافة BMC Attachment Bridge مثبتة ومفعلة، وأن منصة BMC مفتوحة ومسجل الدخول إليها في أي تبويب على نفس المتصفح.");
+      console.error("BMC extension attachment viewer:",err);
+
+      if(err.message==="BMC_NOT_OPEN"){
+        alert("منصة BMC غير مفتوحة. افتح المنصة وسجّل الدخول ثم جرّب مرة أخرى.");
+      }else if(err.message==="BMC_NOT_LOGGED_IN" || err.message==="BMC_HTTP_401" || err.message==="BMC_HTTP_403"){
+        alert("جلسة BMC غير مسجلة الدخول أو انتهت. افتح منصة BMC وسجّل الدخول ثم جرّب مرة أخرى.");
+      }else if(err.message==="EXTENSION_TIMEOUT"){
+        alert("تعذر الاتصال بإضافة المرفقات. تأكد أن الإضافة مفعلة ثم أعد تحميل صفحة الداش بورد.");
+      }else{
+        alert("تعذر قراءة مرفقات البلاغ من BMC: "+err.message);
+      }
     }finally{
       btn.classList.remove("loading");
       btn.textContent=old;
