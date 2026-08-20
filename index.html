@@ -1126,6 +1126,18 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
   let renderedCount=0;
   let rendering=false;
 
+  const ticketCreatedTime=r=>{
+    const v=r?.createdDate;
+    if(v==null||v==="")return 0;
+    if(typeof v==="number")return v;
+    const t=Date.parse(v);
+    if(Number.isFinite(t))return t;
+    const m=String(v).match(/(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})(?:[^\d]+(\d{1,2}):(\d{2}))?/);
+    if(!m)return 0;
+    return new Date(+m[1],+m[2]-1,+m[3],+(m[4]||0),+(m[5]||0)).getTime();
+  };
+  const sortedTickets=()=>F.slice().sort((x,y)=>ticketCreatedTime(y)-ticketCreatedTime(x));
+
   const flagText=v=>{
     if(v===true||v===1)return "نعم";
     if(v===false||v===0||v==null)return "لا";
@@ -1183,14 +1195,15 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
       }
 
       const desired=Math.min(visibleLimit,F.length);
+      const rows=sortedTickets();
 
       // If another existing renderer replaced the rows, normalize once to the current filtered slice.
       if(tbody.children.length!==renderedCount || desired<renderedCount){
-        tbody.innerHTML=F.slice(0,desired).map(rowHtml).join("");
+        tbody.innerHTML=rows.slice(0,desired).map(rowHtml).join("");
         renderedCount=desired;
       }else if(desired>renderedCount){
         // Append only the next filtered batch. This preserves the current scrollbar position.
-        tbody.insertAdjacentHTML("beforeend",F.slice(renderedCount,desired).map(rowHtml).join(""));
+        tbody.insertAdjacentHTML("beforeend",rows.slice(renderedCount,desired).map(rowHtml).join(""));
         renderedCount=desired;
       }
 
