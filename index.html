@@ -1160,7 +1160,7 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
 
     return `<tr>
       <td>${caseCell}</td>
-      <td class="ticketAttachments"><button class="attachmentViewBtn" type="button" data-record-id="${esc(r.recordId||"")}" data-case-id="${esc(r.caseId||"")}" ${r.recordId?"":"disabled"}>عرض</button></td>
+      <td class="ticketAttachments"><button class="attachmentViewBtn" type="button" data-record-id="${esc(r.recordId||"")}" data-case-id="${esc(r.caseId||"")}" data-building="${esc(r.building||"")}" data-type="${esc(r.gender||"")}" data-supervisor="${esc(r.supervisor||"")}" data-description="${esc(r.description||"")}" ${r.recordId?"":"disabled"}>عرض</button></td>
       <td>${esc(lab("priority",r.priority))}</td>
       <td>${esc(lab("status",r.status))}</td>
       <td>${ticketSlaBadge(r)}</td>
@@ -1639,7 +1639,7 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
 
 
 <style id="ticketAttachmentsVerifiedStyle">
-.ticketTable{min-width:0!important;width:100%!important}.ticketTable th:nth-child(14){width:17%!important}.ticketTable th:nth-child(15){width:7%!important}.ticketAttachments{text-align:center!important;vertical-align:middle!important}.attachmentViewBtn{min-width:54px;border:1px solid #0aa095;background:#fff;color:#087d76;border-radius:7px;padding:6px 9px;font:inherit;font-size:10px;font-weight:800;cursor:pointer;white-space:nowrap}.attachmentViewBtn:hover{background:#eaf8f6}.attachmentViewBtn:disabled{opacity:.4;cursor:not-allowed}.attachmentViewBtn.loading{pointer-events:none;opacity:.65}.ticketAttachmentOverlay{position:fixed;inset:0;background:rgba(10,24,31,.72);z-index:99999;display:flex;align-items:center;justify-content:center;padding:22px}.ticketAttachmentModal{width:min(1180px,96vw);max-height:92vh;overflow:auto;background:#fff;border-radius:16px;box-shadow:0 22px 70px rgba(0,0,0,.3);padding:18px;direction:rtl}.ticketAttachmentHead{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}.ticketAttachmentHead h3{margin:0;font-size:18px;color:#20323b}.ticketAttachmentClose{border:0;background:#eef3f5;border-radius:10px;width:38px;height:38px;font-size:22px;cursor:pointer;color:#243640}.ticketAttachmentInfo{font-size:12px;color:#6d7f87;margin:0 0 12px}.ticketAttachmentGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.ticketAttachmentCard{border:1px solid #dfe8eb;border-radius:12px;overflow:hidden;background:#f7fafb}.ticketAttachmentCard img{width:100%;height:410px;object-fit:contain;display:block;background:#eef3f5}.ticketAttachmentName{padding:9px 10px;font-size:12px;color:#425761;text-align:center;background:#fff}.ticketAttachmentEmpty{padding:36px;text-align:center;color:#6d7f87;border:1px dashed #ccd9dd;border-radius:12px}@media(max-width:700px){.ticketTable td:nth-child(2):before{content:"المرفقات"!important}.ticketAttachmentGrid{grid-template-columns:1fr}.ticketAttachmentCard img{height:340px}}
+.ticketTable{min-width:0!important;width:100%!important}.ticketTable th:nth-child(14){width:17%!important}.ticketTable th:nth-child(15){width:7%!important}.ticketAttachments{text-align:center!important;vertical-align:middle!important}.attachmentViewBtn{min-width:54px;border:1px solid #0aa095;background:#fff;color:#087d76;border-radius:7px;padding:6px 9px;font:inherit;font-size:10px;font-weight:800;cursor:pointer;white-space:nowrap}.attachmentViewBtn:hover{background:#eaf8f6}.attachmentViewBtn:disabled{opacity:.4;cursor:not-allowed}.attachmentViewBtn.loading{pointer-events:none;opacity:.65}.ticketAttachmentOverlay{position:fixed;inset:0;background:rgba(10,24,31,.72);z-index:99999;display:flex;align-items:center;justify-content:center;padding:22px}.ticketAttachmentModal{width:min(1180px,96vw);max-height:92vh;overflow:auto;background:#fff;border-radius:16px;box-shadow:0 22px 70px rgba(0,0,0,.3);padding:18px;direction:rtl}.ticketAttachmentHead{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}.ticketAttachmentHead h3{margin:0;font-size:18px;color:#20323b}.ticketAttachmentClose{border:0;background:#eef3f5;border-radius:10px;width:38px;height:38px;font-size:22px;cursor:pointer;color:#243640}.ticketAttachmentInfo{font-size:13px;color:#405862;margin:0 0 14px;padding:10px 12px;background:#f7fafb;border:1px solid #e1eaed;border-radius:10px;line-height:1.8}.ticketAttachmentInfo strong{color:#20323b}.ticketAttachmentDescription{white-space:normal}.ticketAttachmentGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.ticketAttachmentCard{border:1px solid #dfe8eb;border-radius:12px;overflow:hidden;background:#f7fafb}.ticketAttachmentCard img{width:100%;height:410px;object-fit:contain;display:block;background:#eef3f5}.ticketAttachmentName{padding:9px 10px;font-size:12px;color:#425761;text-align:center;background:#fff}.ticketAttachmentEmpty{padding:36px;text-align:center;color:#6d7f87;border:1px dashed #ccd9dd;border-radius:12px}@media(max-width:700px){.ticketTable td:nth-child(2):before{content:"المرفقات"!important}.ticketAttachmentGrid{grid-template-columns:1fr}.ticketAttachmentCard img{height:340px}}
 </style>
 
 
@@ -1709,7 +1709,7 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
 
   const close=()=>document.querySelector(".ticketAttachmentOverlay")?.remove();
 
-  async function show(caseId,items){
+  async function show(caseId,items,details={}){
     close();
     const ov=document.createElement("div");
     ov.className="ticketAttachmentOverlay";
@@ -1719,7 +1719,12 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
         <h3>مرفقات البلاغ — ${escHtml(caseId)}</h3>
         <button class="ticketAttachmentClose" type="button" aria-label="إغلاق">×</button>
       </div>
-      <p class="ticketAttachmentInfo">يتم جلب مرفقات هذا البلاغ فقط من جلسة BMC المفتوحة في المتصفح. لا يتم رفع أي مرفقات إلى GitHub.</p>
+      <div class="ticketAttachmentInfo">
+        <div><strong>اسم المدرسة:</strong> ${escHtml(details.building||"—")}</div>
+        <div><strong>النوع:</strong> ${escHtml(details.type||"—")}</div>
+        <div><strong>اسم المشرف:</strong> ${escHtml(details.supervisor||"—")}</div>
+        <div class="ticketAttachmentDescription"><strong>الوصف:</strong> ${escHtml(details.description||"—")}</div>
+      </div>
       <div class="ticketAttachmentGrid"></div>
     </div>`;
 
@@ -1798,7 +1803,12 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
       }
 
       const items=await getAttachments(recordId);
-      await show(caseId,items);
+      await show(caseId,items,{
+        building:btn.dataset.building||"",
+        type:btn.dataset.type||"",
+        supervisor:btn.dataset.supervisor||"",
+        description:btn.dataset.description||""
+      });
     }catch(err){
       console.error("BMC extension attachment viewer:",err);
 
