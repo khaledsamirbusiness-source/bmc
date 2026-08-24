@@ -1640,7 +1640,7 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
 
 
 <style id="ticketAttachmentsVerifiedStyle">
-.ticketTable{min-width:0!important;width:100%!important}.ticketTable th:nth-child(14){width:17%!important}.ticketTable th:nth-child(15){width:7%!important}.ticketAttachments{text-align:center!important;vertical-align:middle!important}.attachmentViewBtn{min-width:54px;border:1px solid #0aa095;background:#fff;color:#087d76;border-radius:7px;padding:6px 9px;font:inherit;font-size:10px;font-weight:800;cursor:pointer;white-space:nowrap}.attachmentViewBtn:hover{background:#eaf8f6}.attachmentViewBtn:disabled{opacity:.4;cursor:not-allowed}.attachmentViewBtn.loading{pointer-events:none;opacity:.65}.ticketAttachmentOverlay{position:fixed;inset:0;background:rgba(10,24,31,.72);z-index:99999;display:flex;align-items:center;justify-content:center;padding:22px}.ticketAttachmentModal{width:min(1180px,96vw);max-height:92vh;overflow:auto;background:#fff;border-radius:16px;box-shadow:0 22px 70px rgba(0,0,0,.3);padding:18px;direction:rtl}.ticketAttachmentHead{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}.ticketAttachmentHead h3{margin:0;font-size:18px;color:#20323b}.ticketAttachmentClose{border:0;background:#eef3f5;border-radius:10px;width:38px;height:38px;font-size:22px;cursor:pointer;color:#243640}.ticketAttachmentInfo{font-size:13px;color:#405862;margin:0 0 14px;padding:10px 12px;background:#f7fafb;border:1px solid #e1eaed;border-radius:10px;line-height:1.8}.ticketAttachmentInfo strong{color:#20323b}.ticketAttachmentDescription{white-space:normal}.ticketAttachmentGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.ticketAttachmentCard{border:1px solid #dfe8eb;border-radius:12px;overflow:hidden;background:#f7fafb}.ticketAttachmentCard img{width:100%;height:410px;object-fit:contain;display:block;background:#eef3f5}.ticketAttachmentName{padding:9px 10px;font-size:12px;color:#425761;text-align:center;background:#fff}.ticketAttachmentEmpty{padding:36px;text-align:center;color:#6d7f87;border:1px dashed #ccd9dd;border-radius:12px}@media(max-width:700px){.ticketTable td:nth-child(2):before{content:"المرفقات"!important}.ticketAttachmentGrid{grid-template-columns:1fr}.ticketAttachmentCard img{height:340px}}
+.ticketTable{min-width:0!important;width:100%!important}.ticketTable th:nth-child(14){width:17%!important}.ticketTable th:nth-child(15){width:7%!important}.ticketAttachments{text-align:center!important;vertical-align:middle!important}.attachmentViewBtn{min-width:54px;border:1px solid #0aa095;background:#fff;color:#087d76;border-radius:7px;padding:6px 9px;font:inherit;font-size:10px;font-weight:800;cursor:pointer;white-space:nowrap}.attachmentViewBtn:hover{background:#eaf8f6}.attachmentViewBtn:disabled{opacity:.4;cursor:not-allowed}.attachmentViewBtn.loading{pointer-events:none;opacity:.65}.ticketAttachmentOverlay{position:fixed;inset:0;background:rgba(10,24,31,.72);z-index:99999;display:flex;align-items:center;justify-content:center;padding:22px}.ticketAttachmentModal{width:min(1180px,96vw);max-height:92vh;overflow:auto;background:#fff;border-radius:16px;box-shadow:0 22px 70px rgba(0,0,0,.3);padding:18px;direction:rtl}.ticketAttachmentHead{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}.ticketAttachmentHead h3{margin:0;font-size:18px;color:#20323b}.ticketAttachmentClose{border:0;background:#eef3f5;border-radius:10px;width:38px;height:38px;font-size:22px;cursor:pointer;color:#243640}.ticketAttachmentInfo{font-size:13px;color:#405862;margin:0 0 14px;padding:10px 12px;background:#f7fafb;border:1px solid #e1eaed;border-radius:10px;line-height:1.8}.ticketAttachmentInfo strong{color:#20323b}.ticketAttachmentDescription{white-space:normal}.ticketAttachmentGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.ticketAttachmentCard{border:1px solid #dfe8eb;border-radius:12px;overflow:hidden;background:#f7fafb}.ticketAttachmentCard img{width:100%;height:410px;object-fit:contain;display:block;background:#eef3f5}.ticketAttachmentPages{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;padding:8px;background:#eef3f5}.ticketAttachmentPage{min-width:0;background:#fff;border-radius:8px;overflow:hidden}.ticketAttachmentPage img{height:330px!important}.ticketAttachmentPageName{font-size:10px;color:#61747c;text-align:center;padding:5px;background:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ticketAttachmentName{padding:9px 10px;font-size:12px;color:#425761;text-align:center;background:#fff}.ticketAttachmentEmpty{padding:36px;text-align:center;color:#6d7f87;border:1px dashed #ccd9dd;border-radius:12px}@media(max-width:700px){.ticketTable td:nth-child(2):before{content:"المرفقات"!important}.ticketAttachmentGrid{grid-template-columns:1fr}.ticketAttachmentCard img{height:340px}}
 </style>
 
 
@@ -1708,6 +1708,94 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
     return data?.dataUrl||"";
   }
 
+  const mediaLibs={heic:null,pdf:null};
+
+  const loadScriptOnce=(key,src)=>new Promise((resolve,reject)=>{
+    if(mediaLibs[key]){resolve(mediaLibs[key]);return}
+    const old=document.querySelector(`script[data-bmc-media-lib="${key}"]`);
+    if(old){
+      old.addEventListener("load",()=>resolve(mediaLibs[key]=true),{once:true});
+      old.addEventListener("error",()=>reject(new Error("LIB_LOAD_FAILED_"+key)),{once:true});
+      return;
+    }
+    const s=document.createElement("script");
+    s.src=src;
+    s.async=true;
+    s.dataset.bmcMediaLib=key;
+    s.onload=()=>{mediaLibs[key]=true;resolve(true)};
+    s.onerror=()=>reject(new Error("LIB_LOAD_FAILED_"+key));
+    document.head.appendChild(s);
+  });
+
+  const dataUrlToBlob=async dataUrl=>await (await fetch(dataUrl)).blob();
+
+  const blobToDataUrl=blob=>new Promise((resolve,reject)=>{
+    const r=new FileReader();
+    r.onload=()=>resolve(String(r.result||""));
+    r.onerror=()=>reject(r.error||new Error("FILE_READER_ERROR"));
+    r.readAsDataURL(blob);
+  });
+
+  const isHeicAttachment=a=>{
+    const n=String(a?.name||"").toLowerCase();
+    const t=String(a?.mediaType||"").toLowerCase();
+    return /\.(heic|heif)$/i.test(n)||/image\/hei[cf]/i.test(t);
+  };
+
+  const isPdfAttachment=a=>{
+    const n=String(a?.name||"").toLowerCase();
+    const t=String(a?.mediaType||"").toLowerCase();
+    return /\.pdf$/i.test(n)||t.includes("application/pdf");
+  };
+
+  async function convertHeicToJpeg(dataUrl){
+    await loadScriptOnce("heic","https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js");
+    if(typeof window.heic2any!=="function")throw Error("HEIC_CONVERTER_NOT_READY");
+    const source=await dataUrlToBlob(dataUrl);
+    let converted=await window.heic2any({blob:source,toType:"image/jpeg",quality:.84});
+    if(Array.isArray(converted))converted=converted[0];
+    if(!(converted instanceof Blob))throw Error("HEIC_CONVERSION_FAILED");
+    return await blobToDataUrl(converted);
+  }
+
+  async function pdfPagesToImages(dataUrl,baseName){
+    await loadScriptOnce("pdf","https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js");
+    if(!window.pdfjsLib)throw Error("PDF_READER_NOT_READY");
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    const buf=await (await fetch(dataUrl)).arrayBuffer();
+    const pdf=await window.pdfjsLib.getDocument({data:new Uint8Array(buf)}).promise;
+    const pages=[];
+    for(let i=1;i<=pdf.numPages;i++){
+      const page=await pdf.getPage(i);
+      const viewport=page.getViewport({scale:1.35});
+      const canvas=document.createElement("canvas");
+      canvas.width=Math.ceil(viewport.width);
+      canvas.height=Math.ceil(viewport.height);
+      const ctx=canvas.getContext("2d",{alpha:false});
+      await page.render({canvasContext:ctx,viewport}).promise;
+      pages.push({
+        name:`${baseName||"PDF"} - صفحة ${i}`,
+        dataUrl:canvas.toDataURL("image/jpeg",.82),
+        mediaType:"image/jpeg"
+      });
+    }
+    try{await pdf.destroy()}catch{}
+    return pages;
+  }
+
+  async function normalizeAttachmentData(a,dataUrl){
+    const name=String(a?.name||"مرفق");
+    if(isHeicAttachment(a)){
+      return [{name:name.replace(/\.(heic|heif)$/i,"")+".jpg",dataUrl:await convertHeicToJpeg(dataUrl),mediaType:"image/jpeg"}];
+    }
+    if(isPdfAttachment(a)){
+      return await pdfPagesToImages(dataUrl,name.replace(/\.pdf$/i,""));
+    }
+    const type=String(a?.mediaType||"").toLowerCase();
+    const isImage=type.startsWith("image/")||/^data:image\//i.test(String(dataUrl||""));
+    return isImage?[{name,dataUrl,mediaType:type||"image/*"}]:[{name,dataUrl,mediaType:type||"application/octet-stream",nonImage:true}];
+  }
+
   const close=()=>document.querySelector(".ticketAttachmentOverlay")?.remove();
 
   async function show(caseId,items,details={}){
@@ -1740,29 +1828,32 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
       return;
     }
 
-    // Create placeholders immediately, then load files in parallel.
-    const cards=items.map((a,i)=>{
+    // Create placeholders immediately, then normalize HEIC/PDF attachments on demand.
+    const cards=items.map(a=>{
       const card=document.createElement("div");
       card.className="ticketAttachmentCard";
       const name=escHtml(a.name||"مرفق");
-      const isImage=String(a.mediaType||"").toLowerCase().startsWith("image/");
-      card.innerHTML=isImage
-        ? `<div style="height:410px;display:grid;place-items:center;background:#eef3f5;color:#74868e">جاري تحميل الصورة…</div><div class="ticketAttachmentName">${name}</div>`
-        : `<div style="min-height:160px;display:grid;place-items:center;background:#f7fafb;color:#74868e">جاري تحميل المرفق…</div><div class="ticketAttachmentName">${name}</div>`;
+      card.innerHTML=`<div style="height:410px;display:grid;place-items:center;background:#eef3f5;color:#74868e">جاري تجهيز المرفق…</div><div class="ticketAttachmentName">${name}</div>`;
       grid.appendChild(card);
-      return {card,a,isImage,name};
+      return {card,a,name};
     });
 
     await Promise.all(cards.map(async x=>{
       try{
         const dataUrl=await getAttachmentData(x.a);
         if(!dataUrl)throw Error("EMPTY_ATTACHMENT");
+        const normalized=await normalizeAttachmentData(x.a,dataUrl);
 
-        if(x.isImage){
-          x.card.firstElementChild.outerHTML=`<img src="${dataUrl}" alt="${x.name}" loading="lazy">`;
-        }else{
-          x.card.firstElementChild.outerHTML=`<div style="min-height:160px;display:grid;place-items:center;padding:20px;text-align:center"><a href="${dataUrl}" download="${x.name}" style="color:#078d87;font-weight:800;text-decoration:none">فتح / تنزيل ${x.name}</a></div>`;
+        if(normalized.length===1 && normalized[0].nonImage){
+          x.card.firstElementChild.outerHTML=`<div style="min-height:160px;display:grid;place-items:center;padding:20px;text-align:center"><a href="${normalized[0].dataUrl}" download="${escHtml(normalized[0].name)}" style="color:#078d87;font-weight:800;text-decoration:none">فتح / تنزيل ${escHtml(normalized[0].name)}</a></div>`;
+          return;
         }
+
+        x.card.innerHTML=`
+          <div class="ticketAttachmentPages">
+            ${normalized.map(p=>`<div class="ticketAttachmentPage"><img src="${p.dataUrl}" alt="${escHtml(p.name)}" loading="lazy"><div class="ticketAttachmentPageName">${escHtml(p.name)}</div></div>`).join("")}
+          </div>
+          <div class="ticketAttachmentName">${x.name}</div>`;
       }catch(err){
         console.error("Attachment file load:",err);
         x.card.firstElementChild.textContent="تعذر تحميل هذا المرفق";
@@ -1770,7 +1861,7 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
     }));
   }
 
-  window.BMCAttachmentAPI={extensionStatus,getAttachments,getAttachmentData};
+  window.BMCAttachmentAPI={extensionStatus,getAttachments,getAttachmentData,normalizeAttachmentData};
 
   document.addEventListener("click",async e=>{
     const btn=e.target?.closest?.(".attachmentViewBtn");
@@ -1875,9 +1966,9 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
     .details{background:#f7fafb;border:1px solid #dfe8eb;border-radius:12px;padding:12px 15px;line-height:1.55;margin-bottom:12px;font-size:14px;flex:0 0 auto}
     .details strong{color:#20323b}
     .desc{white-space:pre-wrap}
-    .images{display:grid;grid-template-columns:repeat(var(--cols,2),minmax(0,1fr));grid-template-rows:repeat(var(--rows,1),minmax(0,1fr));gap:10px;flex:1 1 auto;min-height:0}
-    .imgCard{border:1px solid #dfe8eb;border-radius:12px;overflow:hidden;background:#eef3f5;break-inside:avoid;display:flex;flex-direction:column;min-width:0;min-height:0}
-    .imgCard img{display:block;width:100%;height:100%;min-height:0;flex:1 1 auto;object-fit:contain;background:#eef3f5}
+    .images{display:grid;grid-template-columns:repeat(var(--cols,1),minmax(0,1fr));grid-template-rows:minmax(0,1fr);gap:10px;flex:1 1 auto;min-height:0;align-items:stretch}
+    .imgCard{border:1px solid #dfe8eb;border-radius:12px;overflow:hidden;background:#eef3f5;break-inside:avoid;display:flex;flex-direction:column;min-width:0;min-height:0;height:100%}
+    .imgCard img{display:block;width:100%;height:100%;min-height:0;flex:1 1 auto;object-fit:contain;background:#eef3f5;aspect-ratio:3/4}
     .imgName{padding:5px 8px;text-align:center;background:#fff;color:#526771;font-size:11px;line-height:1.2;flex:0 0 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .empty{padding:36px;text-align:center;border:1px dashed #cbd8dc;border-radius:12px;color:#6d7f87;flex:1 1 auto}
     .failed{padding:12px;border:1px dashed #e2b5bb;border-radius:10px;color:#a83c4b;background:#fff7f8;display:grid;place-items:center;min-height:0}
@@ -1904,14 +1995,7 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
     @media(max-width:800px){.images{grid-template-columns:1fr!important;grid-template-rows:auto!important}.imgCard img{height:420px}}
   `;
 
-  const attachmentGrid=n=>{
-    if(n<=1)return{cols:1,rows:1};
-    if(n<=4)return{cols:2,rows:Math.ceil(n/2)};
-    if(n<=9)return{cols:3,rows:Math.ceil(n/3)};
-    if(n<=16)return{cols:4,rows:Math.ceil(n/4)};
-    const cols=Math.ceil(Math.sqrt(n));
-    return{cols,rows:Math.ceil(n/cols)};
-  };
+  const attachmentGrid=n=>({cols:Math.max(1,n),rows:1});
 
   const makeTicketHtml=(r,attachments)=>{
     const g=attachmentGrid(Math.max(1,attachments.length));
@@ -1947,17 +2031,22 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
   const fetchTicket=async(api,r)=>{
     if(!r?.recordId)return {r,attachments:[]};
     const items=await api.getAttachments(r.recordId);
-    const attachments=await Promise.all((items||[]).map(async a=>{
+    const groups=await Promise.all((items||[]).map(async a=>{
       const name=a?.name||"مرفق";
       try{
-        let dataUrl=await api.getAttachmentData(a);
-        dataUrl=await shrinkImage(dataUrl);
-        return{name,dataUrl};
+        const raw=await api.getAttachmentData(a);
+        const normalized=typeof api.normalizeAttachmentData==="function"
+          ?await api.normalizeAttachmentData(a,raw)
+          :[{name,dataUrl:raw}];
+        return await Promise.all(normalized.filter(x=>!x.nonImage).map(async x=>({
+          name:x.name||name,
+          dataUrl:await shrinkImage(x.dataUrl)
+        })));
       }catch(error){
-        return{name,error:String(error?.message||error)};
+        return[{name,error:String(error?.message||error)}];
       }
     }));
-    return{r,attachments};
+    return{r,attachments:groups.flat()};
   };
 
   window.exportDisplayedTicketsPdf=async()=>{
