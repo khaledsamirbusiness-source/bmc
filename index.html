@@ -239,7 +239,7 @@ function toggleCard(mode){cardMode=cardMode===mode?"":mode;$("openCard").classLi
 function filterRows(ignoreId=""){let q=$("q").value.trim(),fd=$("from").value,td=$("to").value,ft=$("fromTime")?.value||"00:00",tt=$("toTime")?.value||"23:59",from=fd?fd+"T"+ft:"",to=td?td+"T"+tt:"";return db.records.filter(r=>{const ds=stampOf(r),clock=ds.slice(11,16),dateOk=(!from||ds>=from)&&(!to||ds<=to)&&((fd||td)||clock>=ft&&clock<=tt);return searchOk(r,q)&&ids.every(id=>id===ignoreId||!sel[id]?.size||sel[id].has(r[fields[id][0]]||"غير محدد"))&&dateOk&&(!cardMode||(cardMode==="open"?isOpen(r):!isOpen(r)))})}
 function buildMulti(){for(const id of ids){const s=$(id);if(!s||!s.options.length)continue;const [field,type]=fields[id];let title=id==="sub1"?"النطاق الفرعي 1":s.options[0].textContent,values=[...new Set(filterRows(id).map(r=>r[field]||"غير محدد"))].sort((a,b)=>lab(type,a).localeCompare(lab(type,b),"ar")).map(v=>({v,t:lab(type,v)}));sel[id]??=new Set;let d=s.nextElementSibling;if(!d?.classList.contains("multi")){d=document.createElement("details");d.className="multi";s.hidden=true;s.after(d)}let checked=values.filter(x=>sel[id].has(x.v)),wasOpen=d.open;d.innerHTML=`<summary>${checked.length?checked.length===values.length?"الكل":checked.length+" محدد":title}</summary><div class="multiMenu"><label><input type="checkbox" data-all ${checked.length===values.length&&values.length?"checked":""}> اختيار الكل</label>${values.map(x=>`<label><input type="checkbox" value="${esc(x.v)}" ${sel[id].has(x.v)?"checked":""}> ${esc(x.t)}</label>`).join("")}</div>`;d.open=wasOpen;d.querySelector("[data-all]").onchange=e=>{sel[id]=new Set(e.target.checked?values.map(x=>x.v):[]);enhancedApply()};d.querySelectorAll("input:not([data-all])").forEach(x=>x.onchange=()=>{x.checked?sel[id].add(x.value):sel[id].delete(x.value);enhancedApply()})}}
 fill=function(){};
-function searchOk(r,q){if(!q)return true;const tokens=q.split(/[\s,،;\n\t]+/).map(x=>x.trim()).filter(Boolean);if(!tokens.length)return true;if(tokens.every(x=>/^(?:[ASM]-*)?\d+$/i.test(x)))return new Set(tokens.map(norm)).has(r.ministryNumber);if(tokens.every(x=>/^CASE-\d+$/i.test(x)))return tokens.some(x=>x.toUpperCase()===String(r.caseId).toUpperCase());const hay=[r.caseId,r.display,r.ministryNumber,r.building,r.supervisor,r.city].join(" ").toLowerCase();return tokens.every(x=>hay.includes(x.toLowerCase()))}
+function searchOk(r,q){if(!q)return true;const tokens=q.split(/[\s,،;\n\t]+/).map(x=>x.trim()).filter(Boolean);if(!tokens.length)return true;if(tokens.every(x=>/^(?:[ASM]-*)?\d+$/i.test(x))){const wanted=new Set(tokens.map(norm)),requesterIds=[r.requesterId,r.requestId,r.requestedById].filter(v=>v!==null&&v!==undefined&&String(v).trim()!=="");return wanted.has(norm(r.ministryNumber))||requesterIds.some(v=>wanted.has(norm(v)))}if(tokens.every(x=>/^CASE-\d+$/i.test(x)))return tokens.some(x=>x.toUpperCase()===String(r.caseId).toUpperCase());const hay=[r.caseId,r.display,r.ministryNumber,r.building,r.supervisor,r.city,r.requesterId,r.requestId,r.requestedById].join(" ").toLowerCase();return tokens.every(x=>hay.includes(x.toLowerCase()))}
 function enhancedApply(){ticketLimit=250;F=filterRows();buildMulti();enhancedRender()}
 apply=enhancedApply;
 function mini(id,a){const count=x=>a.filter(r=>r.slmStatus===x).length;$(id).innerHTML=`<span>ضمن المهلة: <b>${n(count("Within Time Limit"))}</b></span><span>تحذير: <b>${n(count("Warning"))}</b></span><span>مخترق: <b>${n(count("Breached"))}</b></span>`}
@@ -1170,7 +1170,7 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
 
     return `<tr>
       <td>${caseCell}</td>
-      <td class="ticketAttachments"><button class="attachmentViewBtn" type="button" data-record-id="${esc(r.recordId||"")}" data-case-id="${esc(r.caseId||"")}" data-building="${esc(r.building||"")}" data-type="${esc(r.gender||"")}" data-supervisor="${esc(r.supervisor||"")}" data-description="${esc(r.description||"")}" ${r.recordId?"":"disabled"}>عرض</button></td>
+      <td class="ticketAttachments"><button class="attachmentViewBtn" type="button" data-record-id="${esc(r.recordId||"")}" data-case-id="${esc(r.caseId||"")}" data-building="${esc(r.building||"")}" data-type="${esc(r.gender||"")}" data-supervisor="${esc(r.supervisor||"")}" data-contractor="${esc(r.contractor||"")}" data-scope="${esc(r.scope||mainScope(r.category2)||"")}" data-description="${esc(r.description||"")}" ${r.recordId?"":"disabled"}>عرض</button></td>
       <td>${esc(lab("priority",r.priority))}</td>
       <td>${esc(lab("status",r.status))}</td>
       <td>${ticketSlaBadge(r)}</td>
@@ -1822,6 +1822,8 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
         <div><strong>اسم المدرسة:</strong> ${escHtml(details.building||"—")}</div>
         <div><strong>النوع:</strong> ${escHtml(details.type||"—")}</div>
         <div><strong>اسم المشرف:</strong> ${escHtml(details.supervisor||"—")}</div>
+        <div><strong>المقاول:</strong> ${escHtml(details.contractor||"—")}</div>
+        <div><strong>النطاق:</strong> ${escHtml(details.scope||"—")}</div>
         <div class="ticketAttachmentDescription"><strong>الوصف:</strong> ${escHtml(details.description||"—")}</div>
       </div>
       <div class="ticketAttachmentGrid"></div>
@@ -1911,6 +1913,8 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
         building:btn.dataset.building||"",
         type:btn.dataset.type||"",
         supervisor:btn.dataset.supervisor||"",
+        contractor:btn.dataset.contractor||"",
+        scope:btn.dataset.scope||"",
         description:btn.dataset.description||""
       });
     }catch(err){
@@ -2033,6 +2037,8 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
         <div><strong>اسم المدرسة:</strong> ${esc(r.building||"—")}</div>
         <div><strong>النوع:</strong> ${esc(r.gender||"—")}</div>
         <div><strong>اسم المشرف:</strong> ${esc(r.supervisor||"—")}</div>
+        <div><strong>المقاول:</strong> ${esc(r.contractor||"—")}</div>
+        <div><strong>النطاق:</strong> ${esc(r.scope||mainScope(r.category2)||"—")}</div>
         <div class="desc"><strong>الوصف:</strong> ${esc(r.description||"—")}</div>
       </div>
       ${attachments.length
