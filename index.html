@@ -183,7 +183,10 @@ async function githubCurrentSha(token){
   "X-GitHub-Api-Version":"2026-03-10"
  }});
  if(res.status===404)return null;
- if(!res.ok)throw Error("تعذر قراءة ملف البيانات من GitHub ("+res.status+")");
+ if(!res.ok){
+  if(res.status===401||res.status===403)localStorage.removeItem(GH_SHARED.tokenKey);
+  throw Error("تعذر قراءة ملف البيانات من GitHub ("+res.status+")");
+ }
  const x=await res.json();
  return x?.sha||null;
 }
@@ -1148,7 +1151,7 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
     <p>أدخل GitHub API Token مرة واحدة على هذا الجهاز. لن يتم رفع الـToken إلى الموقع أو ملف البيانات.</p>
     <form class="githubTokenForm">
       <input class="adminPasswordField githubTokenInput" type="password" autocomplete="off" autofocus placeholder="GitHub Token">
-      <div class="githubTokenNote">يجب أن يمتلك صلاحية Contents: Read and write على مستودع bmc.</div>
+      <div class="githubTokenNote">يجب أن يمتلك صلاحية Contents: Read and write على مستودع nbbmc.</div>
       <div class="adminDialogError"></div>
       <div class="adminDialogButtons">
         <button class="adminDialogOk" type="submit">حفظ</button>
