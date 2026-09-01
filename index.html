@@ -1889,16 +1889,30 @@ body.admin-mode #ticketImport[data-admin-only="true"]{display:inline-flex!import
   };
 
   async function convertHeicToJpeg(dataUrl){
+    const original=await dataUrlToBlob(dataUrl);
+    const bytes=await original.arrayBuffer();
+    const source=new Blob([bytes],{type:/image\/hei[cf]/i.test(String(original.type||""))?original.type:"image/heic"});
+
+    // Primary decoder: actively maintained libheif-based converter.
+    try{
+      await loadScriptOnce("heicto",[
+        "https://cdn.jsdelivr.net/npm/heic-to@1.5.2/dist/iife/heic-to.js",
+        "https://unpkg.com/heic-to@1.5.2/dist/iife/heic-to.js"
+      ]);
+      const heicTo=window.HeicTo;
+      if(typeof heicTo==="function"){
+        let converted=await heicTo({blob:source,type:"image/jpeg",quality:.84});
+        if(Array.isArray(converted))converted=converted[0];
+        if(converted instanceof Blob)return await blobToDataUrl(converted);
+      }
+    }catch(err){console.warn("HEIC primary decoder failed; trying fallback",err)}
+
+    // Fallback kept for compatibility with files that worked in earlier builds.
     await loadScriptOnce("heic",[
       "https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js",
       "https://unpkg.com/heic2any@0.0.4/dist/heic2any.min.js"
     ]);
     if(typeof window.heic2any!=="function")throw Error("HEIC_CONVERTER_NOT_READY");
-    const original=await dataUrlToBlob(dataUrl);
-    const bytes=await original.arrayBuffer();
-    const source=/image\/hei[cf]/i.test(String(original.type||""))
-      ?original
-      :new Blob([bytes],{type:"image/heic"});
     let converted=await window.heic2any({blob:source,toType:"image/jpeg",quality:.84});
     if(Array.isArray(converted))converted=converted[0];
     if(!(converted instanceof Blob))throw Error("HEIC_CONVERSION_FAILED");
